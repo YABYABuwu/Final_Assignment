@@ -382,6 +382,40 @@ class ExplorationTests(unittest.TestCase):
         self.assertEqual(result["status"], "node_limit_returned")
         self.assertEqual(len(chassis.commands), 2)
 
+    def test_grid_motion_captures_fresh_yaw_for_each_step_and_return(self):
+        class HeadingChassis(SimulatedChassis):
+            heading = 12.0
+
+            def __init__(self, *args):
+                super().__init__(*args)
+                self.commanded_yaws = []
+
+            def get_pose(self):
+                return (self.slam_map.pose[0], self.slam_map.pose[1], self.heading)
+
+            def move_to(self, x, y, yaw=None, **kwargs):
+                self.commanded_yaws.append(yaw)
+                return super().move_to(x, y, yaw=yaw, **kwargs)
+
+        slam_map = self.make_map()
+        logger = FakeLogger()
+        logger.set("attitude", (0, 0, 0))
+        gimbal = SimulatedGimbal(slam_map, logger, self.ranges)
+        chassis = HeadingChassis(slam_map, logger, gimbal, self.ranges)
+        explorer = DFSExplorer(chassis, gimbal, logger, slam_map, self.settings)
+        explorer.base_pose = (0, 0, 0)
+        explorer.cell_targets = {(0, 0): (0, 0), (1, 0): (.6, 0)}
+        explorer.slam_worker = FakeSlamWorker()
+
+        explorer._move((1, 0))
+        chassis.heading = -7.0
+        explorer._move((0, 0))
+
+        self.assertEqual(chassis.commanded_yaws, [12.0, -7.0])
+        self.assertEqual(explorer.snapshot()["last_motion_heading"], {
+            "yaw_deg": -7.0, "target_m": [0, 0], "kind": "grid_step",
+            "source": "gimbal"})
+
     def test_dfs_does_not_move_when_all_sensor_ranges_are_blocked(self):
         blocked_ranges = [300, 300, 300, 300]
         slam_map = OccupancyGridSLAM(self.settings)

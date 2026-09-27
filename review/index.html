@@ -368,6 +368,12 @@
           note.textContent="การเดิน DFS ใช้ yaw จากมุม gimbal อ้างอิงพื้นลบมุมเทียบตัวรถ (ปรับศูนย์ครั้งแรกกับ yaw chassis)";
           wallPanel.append(note);
         }
+        const heldHeading=run.summary.exploration?.last_motion_heading;
+        if (heldHeading?.yaw_deg != null) {
+          const note=document.createElement("p");
+          note.textContent=`Yaw ที่บันทึกก่อนเดินช่วงล่าสุด: ${heldHeading.yaw_deg.toFixed(1)}° (${heldHeading.source === "gimbal" ? "gimbal" : "attitude"}; ${heldHeading.kind === "alignment" ? "จัดกลางช่อง" : "เดินตามกริด"})`;
+          wallPanel.append(note);
+        }
         if (Array.isArray(scanned)) {
           const note=document.createElement("p");
           note.textContent=`สแกนสี่ทิศ ${scanned.length} ช่อง · กลับช่องเดิมใช้ขอบที่บันทึกไว้`;

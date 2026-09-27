@@ -32,7 +32,7 @@
 - การเปลี่ยน DFS ต้องคงกติกาว่าเดินเฉพาะทิศที่ gimbal/ToF ตรวจใหม่และ ToF เกิน `exploration.wall_threshold_mm` และห้ามวิ่งย้อน stack เมื่อขอบแผนที่ทางกลับไม่เป็น `open`
 - Alignment หลังสแกนช่องใหม่ใช้ระยะผนังจากกึ่งกลาง chassis โดยรวม offset หัว ToF และใช้ `ChassisController.move_to` ในกรอบพิกัด odometry เดียวกับจุดหมาย DFS ต้องเก็บเป้าที่จัดแล้วสำหรับทางกลับ หยุดหากระยะผนังสองฝั่งขัดกับเป้าหมายหรือจำเป็นต้องขยับเกิน `exploration.alignment.max_shift_m`; ตรวจ dashboard/review ให้เห็นระยะก่อนและหลังขยับ
 - `exploration.alignment.enabled` ควบคุมเฉพาะ alignment; เมื่อ false ต้องคงการสแกนกำแพงและการเดิน DFS และแสดงสถานะว่าปิดบน dashboard/review
-- `exploration.heading_source` เลือก yaw สำหรับ chassis PID และ DFS scan: `gimbal` คำนวณจาก yaw อ้างอิงพื้นลบ yaw เทียบ chassis ใน sample เดียวกันและปรับศูนย์กับ attitude ครั้งแรก; `attitude` ใช้ช่อง chassis เดิม ต้องตรวจความสดของ gimbal ก่อนเดินเมื่อเลือก gimbal และแสดงแหล่ง yaw บน dashboard/review
+- `exploration.heading_source` เลือก yaw สำหรับ chassis PID และ DFS scan: `gimbal` คำนวณจาก yaw อ้างอิงพื้นลบ yaw เทียบ chassis ใน sample เดียวกันและปรับศูนย์กับ attitude ครั้งแรก; `attitude` ใช้ช่อง chassis เดิม ก่อนเดินตามกริดแต่ละช่วง (รวมทางกลับ) และก่อนขยับจัดกลางช่อง DFS จับ yaw สดจากแหล่งที่เลือกแล้วส่งเป็นเป้าหมายคงที่ให้ PID ตลอดช่วงนั้น ต้องตรวจความสดของ gimbal ก่อนเดินเมื่อเลือก gimbal และแสดง yaw ที่จับได้บน dashboard/review
 
 ### ToF เดี่ยวบน gimbal
 

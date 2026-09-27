@@ -29,6 +29,7 @@ class DFSExplorer:
         self.current_cell = (0, 0)
         self.cell_targets = {}
         self.alignments = {}
+        self.last_motion_heading = None
         self.wall_grid = CellWallGrid(
             settings["step_m"], min(1000, math.ceil(math.hypot(
                 settings["map"]["width_m"], settings["map"]["height_m"]
@@ -54,6 +55,7 @@ class DFSExplorer:
                 "moves": self.moves,
                 "heading_source": self.settings["heading_source"],
                 "alignment_enabled": self.settings["alignment"]["enabled"],
+                "last_motion_heading": self.last_motion_heading,
                 "tof_median_window": self.settings["tof_median_window"],
                 "cell_targets": {f"{node[0]},{node[1]}": list(point)
                                  for node, point in sorted(self.cell_targets.items())},
@@ -84,11 +86,28 @@ class DFSExplorer:
                 pose = getter()
                 if pose is None:
                     raise TimeoutError("gimbal-derived chassis yaw is missing or stale")
-                return float(pose[2])
+                yaw = float(pose[2])
+                if not math.isfinite(yaw):
+                    raise TimeoutError("gimbal-derived chassis yaw is invalid")
+                return yaw
         sample = self.logger.get_sample("attitude", max_age_s=self.settings["max_sample_age_s"])
         if sample is None:
             raise TimeoutError("attitude data is missing or stale during exploration")
-        return float(sample[0][0])
+        yaw = float(sample[0][0])
+        if not math.isfinite(yaw):
+            raise TimeoutError("attitude yaw is invalid during exploration")
+        return yaw
+
+    def _drive_holding_current_yaw(self, x, y, kind):
+        """Capture the live chassis heading immediately before this motion."""
+        yaw = self._current_yaw()
+        with self.lock:
+            self.last_motion_heading = {"yaw_deg": yaw, "target_m": [x, y],
+                                        "kind": kind, "source": self.settings["heading_source"]}
+        self.map.set_exploration_state(self.snapshot())
+        return self.chassis.move_to(x, y, yaw=yaw,
+                                    abort_event=self.slam_worker.abort_event,
+                                    disable_timeout=True)
 
     def _motion_pose(self):
         """Read the chassis frame used by move_to, rather than scan-matched pose."""
@@ -306,9 +325,7 @@ class DFSExplorer:
             raise RuntimeError(f"alignment target for {node} is outside the SLAM map")
         self._set_status("aligning")
         previous_scan = self.map.latest_scan_timestamp or 0.0
-        self.chassis.move_to(*target, yaw=self.base_pose[2],
-                             abort_event=self.slam_worker.abort_event,
-                             disable_timeout=True)
+        self._drive_holding_current_yaw(*target, kind="alignment")
         while (self.map.latest_scan_timestamp or 0.0) <= previous_scan:
             worker_status = self.slam_worker.status()
             if worker_status["error"]:
@@ -376,9 +393,7 @@ class DFSExplorer:
         x, y = target
         previous_scan = self.map.latest_scan_timestamp or 0.0
         previous_status = self.status
-        self.chassis.move_to(x, y, yaw=self.base_pose[2],
-                             abort_event=self.slam_worker.abort_event,
-                             disable_timeout=True)
+        self._drive_holding_current_yaw(x, y, kind="grid_step")
         with self.lock:
             self.moves += 1
             self.current_cell = tuple(destination)

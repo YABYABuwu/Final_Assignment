@@ -66,7 +66,7 @@ exploration:
   position_coordinate_system: 1 # ผูกแผนที่กับพิกัดตั้งแต่เปิดหุ่นยนต์ เพื่อให้โหลดแผนที่เดิมได้ในรอบเปิดเครื่องเดียวกัน
   step_m: 0.60            # ขนาดช่องกริดกำแพง และระยะเดินระหว่างศูนย์กลางช่อง
   max_speed_m_s: 0.20     # จำกัดความเร็วขณะสำรวจแยกจาก mission waypoint
-  heading_source: gimbal  # ใช้ yaw_ground - yaw_relative ระหว่างเดิน; attitude = ใช้ yaw chassis อย่างเดียว
+  heading_source: gimbal  # จับ yaw สดก่อนเดินแต่ละช่วง แล้ว PID รักษาค่านั้น; attitude = ใช้ yaw chassis อย่างเดียว
   wall_threshold_mm: 500 # ToF <= ค่านี้เป็นกำแพง; มากกว่านี้เป็นทางเปิด
   tof_median_window: 3   # ใช้ scan ใหม่ 3 ครั้งหลัง gimbal หยุด แล้วเลือกค่ากลางก่อนตัดสินใจ DFS
   alignment:

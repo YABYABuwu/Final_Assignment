@@ -353,6 +353,8 @@
         const yawEstimate=((Number(latest.gimbal[3])-Number(latest.gimbal[1])+540)%360)-180;
         if (Number.isFinite(yawEstimate)) poseText += ` · Yaw จาก gimbal ≈ ${number(yawEstimate)}°`;
       }
+      const heldHeading = map.exploration?.last_motion_heading;
+      if (heldHeading?.yaw_deg != null) poseText += ` · Yaw เป้าหมายเดินล่าสุด ${number(heldHeading.yaw_deg)}° (${heldHeading.source === "gimbal" ? "gimbal" : "attitude"})`;
       document.getElementById("pose").textContent = poseText;
     }
 
