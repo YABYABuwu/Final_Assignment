@@ -3,12 +3,14 @@ import copy
 import csv
 import json
 import math
+import struct
 import tempfile
 import threading
 import time
 import unittest
 from unittest.mock import patch
 import zipfile
+import zlib
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -192,6 +194,8 @@ class ExplorationTests(unittest.TestCase):
         exported = json.loads(self.request(
             dashboard, "do_GET", "/api/map/export?format=json"
         ))
+        png = self.request(dashboard, "do_GET", "/api/map/export?format=png")
+        self.assertTrue(png.startswith(b"\x89PNG\r\n\x1a\n"))
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "map.json"
             path.write_text(json.dumps(exported), encoding="utf-8")
@@ -211,6 +215,31 @@ class ExplorationTests(unittest.TestCase):
             self.assertIn(b"resolution:", archive.read("map.yaml"))
             self.assertTrue(archive.read("map.pgm").startswith(b"P5\n"))
             self.assertEqual(json.loads(archive.read("slam.json"))["data"], exported["data"])
+
+    def test_stop_saves_png_with_dashboard_axis_orientation(self):
+        settings = copy.deepcopy(self.settings)
+        settings["map"]["width_m"] = .1
+        settings["map"]["height_m"] = .1
+        slam_map = OccupancyGridSLAM(settings)
+        slam_map.log_odds = [1, -1, 0, 0]  # y=0: occupied at x=0, free at x=1
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "latest.json"
+            SlamWorker(FakeLogger(), slam_map, settings).stop(path, Path(temp) / "run")
+            png = path.with_suffix(".png").read_bytes()
+            self.assertTrue(path.exists())
+            self.assertEqual((Path(temp) / "run" / "map.png").read_bytes(), png)
+            self.assertTrue(png.startswith(b"\x89PNG\r\n\x1a\n"))
+            self.assertEqual(struct.unpack(">II", png[16:24]), (8, 8))
+            offset, image_data = 8, bytearray()
+            while offset < len(png):
+                length = struct.unpack(">I", png[offset:offset + 4])[0]
+                kind = png[offset + 4:offset + 8]
+                if kind == b"IDAT":
+                    image_data.extend(png[offset + 8:offset + 8 + length])
+                offset += 12 + length
+            rows = zlib.decompress(image_data)
+            self.assertEqual(rows[1:9], bytes([255] * 4 + [205] * 4))
+            self.assertEqual(rows[-8:], bytes([0] * 4 + [205] * 4))
 
     def test_gimbal_tof_beam_uses_yaw_axis_offset_and_selected_channel(self):
         settings = copy.deepcopy(self.settings)

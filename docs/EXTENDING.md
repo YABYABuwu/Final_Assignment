@@ -48,6 +48,8 @@ ToF ไม่มีเกณฑ์ระยะสั้นสุด/ไกลส
 
 หน้า dashboard และ `/api/map` ใช้ `sensor_model` metadata ชุดเดียวกันเพื่อแสดง channel, offset และทิศหัว ToF; หากเปลี่ยนช่อง, offset, pivot หรือ yaw alignment ให้ตรวจทั้ง overlay กับ JSON export/import. ค่าเริ่มต้นสมมติว่า offset 7.5 ซม. อยู่แนวเลนส์ (`offset_yaw_deg: 0`). ค่า `pivot_x_m/pivot_y_m` ต้องวัดจากหุ่นจริง เพราะระยะ 7.5 ซม. ที่ทราบอยู่แล้วเริ่มจากแกน gimbal ไม่ได้ระบุตำแหน่งแกนเทียบจุดกลาง chassis.
 
+การหยุด `SlamWorker` บันทึก PNG คู่กับ JSON จาก `exploration.map.save_path` และ `map.png` ในโฟลเดอร์ log ของรัน; PNG เป็นภาพ occupancy ที่ +X อยู่ด้านบนและ +Y อยู่ด้านขวาเหมือน dashboard ใช้สีขาวแทนว่าง เทาแทนยังไม่รู้ และดำแทนกำแพง ต้องตรวจ PNG ที่บันทึกและ `/api/map/export?format=png` เมื่อต้องเปลี่ยนการวางแกนหรือสี
+
 ## ตัวอย่างการเพิ่มเซนเซอร์
 
 หาก SDK มี stream ระยะทางใหม่ ให้ดูว่า `tof` เดิมให้ข้อมูลเดียวกันหรือไม่ ถ้าครอบคลุม ให้ใช้ `logger.get_latest("tof", max_age_s=...)` และต่อยอดการแสดงผลจาก stream เดิม หากเป็นคนละข้อมูลจริง ให้เพิ่มชื่อใน `STREAMS` พร้อมลำดับคอลัมน์/หน่วย, ตั้งค่า stream ใน YAML, ตรวจ config, เขียน test ด้วย fake SDK callback แล้วเปิด dashboard เพื่อตรวจค่าล่าสุดและกราฟ ถ้าต้องสืบเหตุย้อนหลัง ให้เปิด `save` และตรวจ CSV, review และเกณฑ์แจ้งเตือนที่เกี่ยวข้อง

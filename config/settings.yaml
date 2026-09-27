@@ -41,7 +41,7 @@ dashboard:
   host: 127.0.0.1          # เปิดดูจากคอมที่รันโปรแกรมเท่านั้น
   port: 8000               # URL: http://127.0.0.1:8000
   resolution: 360p         # 360p / 540p / 720p; เริ่มต่ำเพื่อประหยัด Wi-Fi
-  max_fps: 5               # จำนวนภาพ JPEG สูงสุดที่ส่งให้หน้าเว็บต่อวินาที
+  max_fps: 20               # จำนวนภาพ JPEG สูงสุดที่ส่งให้หน้าเว็บต่อวินาที
   jpeg_quality: 70         # 1-100; ค่าสูงใช้แบนด์วิดท์และ CPU มากขึ้น
 
 review:
@@ -95,7 +95,7 @@ exploration:
     robot_clearance_m: 0.20 # ระยะจากหัว ToF ที่ไม่ทำแผนที่ใต้ตัวหุ่น; ไม่ใช่เกณฑ์รับ/ปฏิเสธค่า
     free_update: -0.40
     occupied_update: 0.85
-    save_path: data/maps/latest.json
+    save_path: data/maps/latest.json # จบรันบันทึก JSON และ PNG ชื่อเดียวกัน (latest.png)
     load_path: null       # ใส่ path ของไฟล์ JSON ที่เคยส่งออก เมื่อต้องการอ่านกลับ
   scan_match:
     translation_m: 0.10

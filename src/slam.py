@@ -2,8 +2,10 @@
 
 import json
 import math
+import struct
 import threading
 import time
+import zlib
 from pathlib import Path
 
 
@@ -595,6 +597,40 @@ class OccupancyGridSLAM:
             json.dump(self.to_dict(), file, ensure_ascii=False, separators=(",", ":"))
         temporary.replace(path)
 
+    def png_bytes(self, scale=4):
+        """Render occupancy as PNG, with +X up and +Y right like the dashboard."""
+        if type(scale) is not int or scale < 1 or scale > 16:
+            raise ValueError("PNG scale must be an integer from 1 to 16")
+        document = self.to_dict()
+        data = document["data"]
+        grid_width, grid_height = document["width"], document["height"]
+        width, height = grid_height * scale, grid_width * scale
+        rows = bytearray()
+        for ix in range(grid_width - 1, -1, -1):
+            line = bytes(205 if data[iy * grid_width + ix] == -1 else
+                         0 if data[iy * grid_width + ix] == 100 else 255
+                         for iy in range(grid_height))
+            expanded = bytes(pixel for pixel in line for _ in range(scale))
+            for _ in range(scale):
+                rows.append(0)  # PNG filter type: none
+                rows.extend(expanded)
+
+        def chunk(kind, payload):
+            return (struct.pack(">I", len(payload)) + kind + payload +
+                    struct.pack(">I", zlib.crc32(kind + payload) & 0xffffffff))
+
+        return (b"\x89PNG\r\n\x1a\n" +
+                chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 0, 0, 0, 0)) +
+                chunk(b"IDAT", zlib.compress(bytes(rows))) +
+                chunk(b"IEND", b""))
+
+    def save_png(self, path):
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(path.suffix + ".tmp")
+        temporary.write_bytes(self.png_bytes())
+        temporary.replace(path)
+
     def ros_map_archive(self):
         """Build a ZIP containing ROS map_server YAML/PGM and the source JSON."""
         import io
@@ -733,7 +769,7 @@ class SlamWorker:
                 raise TimeoutError("SLAM did not receive synchronized pose, gimbal, status and ToF data")
             self.ready.wait(0.1)
 
-    def stop(self, save_path=None):
+    def stop(self, save_path=None, run_dir=None):
         self.stop_event.set()
         if self.thread is not None:
             self.thread.join()
@@ -741,6 +777,9 @@ class SlamWorker:
         self.is_running = False
         if save_path:
             self.map.save_file(save_path)
+            self.map.save_png(Path(save_path).with_suffix(".png"))
+        if run_dir:
+            self.map.save_png(Path(run_dir) / "map.png")
 
     def status(self):
         with self.lock:

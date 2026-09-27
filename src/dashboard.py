@@ -92,7 +92,9 @@ class Dashboard:
             return "application/json; charset=utf-8", content, "robomaster-map.json"
         if format_name == "ros":
             return "application/zip", self.slam_map.ros_map_archive(), "robomaster-ros-map.zip"
-        raise ValueError("format must be json or ros")
+        if format_name == "png":
+            return "image/png", self.slam_map.png_bytes(), "robomaster-map.png"
+        raise ValueError("format must be json, png or ros")
 
     def import_map(self, document):
         if self.slam_map is None:

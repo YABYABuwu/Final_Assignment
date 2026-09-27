@@ -86,7 +86,7 @@ def main():
             logger.wait_for("status")
             slam_worker.wait_ready()
             explorer.run(slam_worker)
-            slam_worker.stop(map_settings["save_path"])
+            slam_worker.stop(map_settings["save_path"], logger.run_dir)
             if dashboard is not None:
                 dashboard.mission_status = f"Exploration {explorer.status}"
             if explorer.status == "no_safe_direction":
@@ -136,7 +136,8 @@ def main():
         finally:
             try:
                 if slam_worker is not None:
-                    slam_worker.stop(map_settings["save_path"])
+                    slam_worker.stop(map_settings["save_path"],
+                                     logger.run_dir if logger is not None else None)
             finally:
                 if logger is not None and explorer is not None:
                     logger.exploration_state = explorer.snapshot()
