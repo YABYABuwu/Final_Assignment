@@ -21,6 +21,7 @@ class ChassisController:
         self.pid_y = PIDController(**pid["y"], max_output=settings["max_speed_m_s"])
         self.pid_yaw = PIDController(**pid["yaw"], max_output=settings["max_turn_deg_s"])
         self.heading_reference = None
+        self.gimbal_heading_offset = None
 
     def reset_heading(self):
         """Use the current heading as the reference on the next move_to call."""
@@ -37,34 +38,57 @@ class ChassisController:
         attitude = self.logger.get_latest("attitude", max_age_s=age)
         if position is None or attitude is None:
             return None
-        return position[0], position[1], attitude[0]
+        yaw = float(attitude[0])
+        if self.settings.get("heading_source", "attitude") == "gimbal":
+            # Gimbal ground yaw and chassis-relative yaw come from one SDK
+            # sample. Their difference tracks chassis rotation even when the
+            # chassis attitude stream under-reports gradual physical yaw.
+            sample = self.logger.get_sample("gimbal", max_age_s=age)
+            if sample is None or len(sample[0]) < 4:
+                return None
+            angles = sample[0]
+            try:
+                valid = all(math.isfinite(float(value)) for value in
+                            (angles[1], angles[3], yaw))
+            except (TypeError, ValueError):
+                return None
+            if not valid:
+                return None
+            observed = angle_error(float(angles[3]), float(angles[1]))
+            if self.gimbal_heading_offset is None:
+                self.gimbal_heading_offset = angle_error(yaw, observed)
+            yaw = angle_error(observed + self.gimbal_heading_offset, 0)
+        return position[0], position[1], yaw
 
-    def move_to(self, x, y, yaw=None, timeout_s=None, abort_event=None):
+    def move_to(self, x, y, yaw=None, timeout_s=None, abort_event=None,
+                disable_timeout=False):
         """Drive toward an absolute (x, y) waypoint; optionally face yaw.
 
         x/y use the chassis position frame established at subscription.
         With yaw=None, hold the first move's heading across later waypoints.
         Returns the final pose. Raises TimeoutError when data or progress stops.
         """
-        timeout = timeout_s if timeout_s is not None else self.settings["timeout_s"]
-        if timeout <= 0:
+        timeout = None if disable_timeout else (
+            timeout_s if timeout_s is not None else self.settings["timeout_s"]
+        )
+        if timeout is not None and timeout <= 0:
             raise ValueError("timeout_s must be positive")
         for pid in (self.pid_x, self.pid_y, self.pid_yaw):
             pid.reset()
 
         period = self.settings["control_period_s"]
-        deadline = time.monotonic() + timeout
+        deadline = None if timeout is None else time.monotonic() + timeout
         previous = time.monotonic()
         target_yaw = yaw
         if yaw is not None:
             self.heading_reference = yaw
         try:
-            while time.monotonic() < deadline:
+            while deadline is None or time.monotonic() < deadline:
                 if abort_event is not None and abort_event.is_set():
                     raise RuntimeError("motion aborted because exploration telemetry failed")
                 pose = self.get_pose()
                 if pose is None:
-                    raise TimeoutError("position or attitude data is missing/stale")
+                    raise TimeoutError("position, attitude, or configured heading data is missing/stale")
                 current_x, current_y, current_yaw = pose
                 if target_yaw is None and self.settings.get("hold_heading", True):
                     if self.heading_reference is None:
@@ -94,7 +118,11 @@ class ChassisController:
                 if speed > limit:
                     vx_robot *= limit / speed
                     vy_robot *= limit / speed
-                turn = 0 if facing else self.pid_yaw.compute(heading_error, dt)
+                # Keep correcting small heading errors while translating. The
+                # arrival tolerance only decides when the waypoint is done;
+                # using it as a deadband lets yaw drift during long slides.
+                turn = (self.pid_yaw.compute(heading_error, dt)
+                        if target_yaw is not None else 0)
                 self.chassis.drive_speed(x=vx_robot, y=vy_robot, z=turn)
                 time.sleep(period)
             raise TimeoutError(f"waypoint ({x}, {y}, {yaw}) not reached within {timeout} s")

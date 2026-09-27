@@ -81,6 +81,17 @@ class ReviewTests(unittest.TestCase):
             self.assertEqual(result["issues"][0]["level"], "warning")
             self.assertIn("ไม่มีทิศ", result["issues"][0]["message"])
 
+    def test_zero_tof_is_reported_once_per_invalid_streak(self):
+        with tempfile.TemporaryDirectory() as temp:
+            run_dir = Path(temp) / "zeros"
+            run_dir.mkdir()
+            write_csv(run_dir / "tof.csv", ["tof_0_mm"], [
+                [1, 0.0, 0], [2, 0.1, 0], [3, 0.2, 350], [4, 0.3, 0],
+            ])
+            result = RunStore(temp).load_run("zeros")
+            messages = [issue["message"] for issue in result["issues"]]
+            self.assertEqual(messages.count("ToF #0 returned 0 mm; scan skipped"), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

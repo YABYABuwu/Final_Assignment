@@ -7,6 +7,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -96,7 +97,7 @@ class SimulatedChassis:
         self.scan_time = time.time()
         self.commands = []
 
-    def move_to(self, x, y, yaw=None, abort_event=None):
+    def move_to(self, x, y, yaw=None, abort_event=None, disable_timeout=False):
         if abort_event is not None and abort_event.is_set():
             raise RuntimeError("simulated motion aborted")
         pose = (x, y, yaw or 0.0)
@@ -114,7 +115,11 @@ class SimulatedChassis:
 class ExplorationTests(unittest.TestCase):
     def setUp(self):
         self.config = load_config()
-        self.settings = self.config["exploration"]
+        self.settings = copy.deepcopy(self.config["exploration"])
+        # Keep the simulated geometry stable when the hardware settings change.
+        self.settings["wall_threshold_mm"] = 300
+        self.settings["alignment"].update({"enabled": True, "wall_distance_m": .25,
+                                           "tolerance_m": .03, "max_shift_m": .20})
         self.ranges = [2000, 2000, 2000, 2000]
 
     def make_map(self):
@@ -271,20 +276,24 @@ class ExplorationTests(unittest.TestCase):
         self.assertAlmostEqual(slam_map.pose[1], 0.0)
         self.assertEqual(slam_map.exploration_state["status"], "node_limit_returned")
 
-    def test_dfs_scans_four_directions_before_every_move(self):
+    def test_dfs_scans_new_cell_before_forward_move_but_not_return(self):
         class CheckingChassis(SimulatedChassis):
             def __init__(self, slam_map, logger, gimbal, ranges):
                 super().__init__(slam_map, logger, gimbal, ranges)
                 self.previous_scan_count = 0
 
-            def move_to(self, x, y, yaw=None, abort_event=None):
+            def move_to(self, x, y, yaw=None, abort_event=None,
+                        disable_timeout=False):
                 new_scans = self.gimbal.commands[self.previous_scan_count:]
                 if not self.commands:
                     self_test.assertEqual([round(command[1]) for command in new_scans[:4]],
                                           [0, -90, -180, 90])
-                self_test.assertGreaterEqual(len(new_scans), 4)
+                    self_test.assertEqual(len(new_scans), 5)
+                else:
+                    self_test.assertEqual(len(new_scans), 0)
                 self.previous_scan_count = len(self.gimbal.commands)
-                return super().move_to(x, y, yaw=yaw, abort_event=abort_event)
+                return super().move_to(x, y, yaw=yaw, abort_event=abort_event,
+                                       disable_timeout=disable_timeout)
 
         self_test = self
         slam_map = self.make_map()
@@ -317,6 +326,94 @@ class ExplorationTests(unittest.TestCase):
         self.assertEqual(chassis.commands, [])
         current = next(cell for cell in result["cell_grid"]["cells"] if cell["index"] == [0, 0])
         self.assertTrue(all(side["state"] == "wall" for side in current["sides"].values()))
+
+    def test_alignment_uses_center_distance_and_keeps_corrected_return_target(self):
+        slam_map = self.make_map()
+        logger = FakeLogger()
+        logger.set("attitude", (0, 0, 0))
+        # A wall 12.5 cm ahead of the ToF is 20 cm from the chassis center.
+        def wall_range(pose, yaw):
+            return round((.2 - pose[0] - .075) * 1000)
+        gimbal = SimulatedGimbal(slam_map, logger, wall_range)
+        chassis = SimulatedChassis(slam_map, logger, gimbal, wall_range)
+        explorer = DFSExplorer(chassis, gimbal, logger, slam_map, self.settings)
+        explorer.base_pose = (0, 0, 0)
+        explorer.slam_worker = FakeSlamWorker()
+        explorer.cell_targets[(0, 0)] = (0, 0)
+        explorer.wall_grid.observe((0, 0), (1, 0), .2, 125, 300, time.time())
+
+        explorer._align_cell((0, 0))
+
+        self.assertAlmostEqual(chassis.commands[0][0], -.05)
+        self.assertAlmostEqual(explorer.cell_targets[(0, 0)][0], -.05)
+        self.assertEqual(explorer.alignments[(0, 0)]["walls"], {"x+": .2})
+        self.assertEqual(explorer.alignments[(0, 0)]["status"], "moved")
+        self.assertAlmostEqual(explorer.alignments[(0, 0)]["after_m"]["x+"], .25)
+        explorer._move((0, 1))
+        self.assertAlmostEqual(chassis.commands[-1][0], -.05)
+        self.assertAlmostEqual(chassis.commands[-1][1], .6)
+        explorer._move((0, 0))
+        self.assertAlmostEqual(chassis.commands[-1][0], -.05)
+
+    def test_alignment_rejects_opposing_walls_too_close_for_target_distance(self):
+        slam_map = self.make_map()
+        logger = FakeLogger()
+        logger.set("attitude", (0, 0, 0))
+        gimbal = SimulatedGimbal(slam_map, logger, 100)
+        chassis = SimulatedChassis(slam_map, logger, gimbal, 100)
+        explorer = DFSExplorer(chassis, gimbal, logger, slam_map, self.settings)
+        explorer.base_pose = (0, 0, 0)
+        for delta in ((1, 0), (-1, 0)):
+            explorer.wall_grid.observe((0, 0), delta, .175, 100, 300, time.time())
+
+        with self.assertRaisesRegex(RuntimeError, "cannot stay"):
+            explorer._align_cell((0, 0))
+        self.assertEqual(chassis.commands, [])
+
+    def test_disabled_alignment_keeps_wall_scan_and_skips_alignment(self):
+        settings = copy.deepcopy(self.settings)
+        settings["alignment"]["enabled"] = False
+        blocked_ranges = [300, 300, 300, 300]
+        slam_map = OccupancyGridSLAM(settings)
+        slam_map.update((0, 0, 0), blocked_ranges)
+        logger = FakeLogger()
+        logger.set("attitude", (0, 0, 0))
+        gimbal = SimulatedGimbal(slam_map, logger, blocked_ranges)
+        chassis = SimulatedChassis(slam_map, logger, gimbal, blocked_ranges)
+        explorer = DFSExplorer(chassis, gimbal, logger, slam_map, settings)
+
+        with patch.object(explorer, "_align_cell", side_effect=AssertionError("alignment called")):
+            result = explorer.run(FakeSlamWorker())
+
+        self.assertEqual(result["status"], "no_safe_direction")
+        self.assertEqual(len(gimbal.commands), 4)
+        self.assertFalse(result["alignment_enabled"])
+        self.assertEqual(result["alignments"], {})
+        self.assertEqual(chassis.commands, [])
+
+    def test_alignment_centers_between_two_walls(self):
+        slam_map = self.make_map()
+        logger = FakeLogger()
+        logger.set("attitude", (0, 0, 0))
+        def wall_range(pose, yaw):
+            if abs(((yaw + 180) % 360) - 180) < 90:
+                return round((.25 - pose[0] - .075) * 1000)
+            return round((pose[0] + .35 - .075) * 1000)
+        gimbal = SimulatedGimbal(slam_map, logger, wall_range)
+        chassis = SimulatedChassis(slam_map, logger, gimbal, wall_range)
+        explorer = DFSExplorer(chassis, gimbal, logger, slam_map, self.settings)
+        explorer.base_pose = (0, 0, 0)
+        explorer.slam_worker = FakeSlamWorker()
+        explorer.cell_targets[(0, 0)] = (0, 0)
+        explorer.wall_grid.observe((0, 0), (1, 0), .25, 175, 300, time.time())
+        explorer.wall_grid.observe((0, 0), (-1, 0), .35, 275, 300, time.time())
+
+        explorer._align_cell((0, 0))
+
+        self.assertAlmostEqual(chassis.commands[0][0], -.05)
+        self.assertAlmostEqual(chassis.commands[0][1], 0)
+        self.assertEqual(explorer.alignments[(0, 0)]["walls"],
+                         {"x+": .25, "x-": .35})
 
     def test_gimbal_chooses_nearest_relative_yaw_at_half_turn(self):
         slam_map = OccupancyGridSLAM(self.settings)
@@ -402,16 +499,12 @@ class ExplorationTests(unittest.TestCase):
                 self.pending_action = PendingAction()
                 return self.pending_action
 
-        settings = copy.deepcopy(self.settings)
-        settings["gimbal"]["move_timeout_s"] = 0.01
-        settings["gimbal"]["scan_timeout_s"] = 0.01
-        settings["gimbal"]["action_timeout_s"] = 0.3
-        slam_map = OccupancyGridSLAM(settings)
+        slam_map = OccupancyGridSLAM(self.settings)
         slam_map.update((0, 0, 0), 2000)
         logger = FakeLogger()
         logger.set("attitude", (0, 0, 0))
         gimbal = BusyGimbal(slam_map, logger, 2000)
-        explorer = DFSExplorer(None, gimbal, logger, slam_map, settings)
+        explorer = DFSExplorer(None, gimbal, logger, slam_map, self.settings)
         explorer.base_pose = (0, 0, 0)
         explorer.slam_worker = FakeSlamWorker()
 
@@ -421,33 +514,32 @@ class ExplorationTests(unittest.TestCase):
         self.assertTrue(gimbal.pending_action.completion_confirmed)
         self.assertEqual(len(gimbal.commands), 2)
 
-    def test_gimbal_action_timeout_reports_state_and_angles(self):
-        class StuckAction:
-            state = "action_running"
+    def test_gimbal_action_failure_stops_scan(self):
+        class FailedAction:
             has_succeeded = False
-            _percent = 98
 
-        class StuckGimbal(SimulatedGimbal):
+            @property
+            def state(self):
+                return "action_failed"
+
+        class FailedGimbal(SimulatedGimbal):
             def moveto(self, pitch, yaw, pitch_speed, yaw_speed):
                 super().moveto(pitch, yaw, pitch_speed, yaw_speed)
-                return StuckAction()
+                return FailedAction()
 
-        settings = copy.deepcopy(self.settings)
-        settings["gimbal"]["move_timeout_s"] = 0.01
-        settings["gimbal"]["action_timeout_s"] = 0.05
-        slam_map = OccupancyGridSLAM(settings)
+        slam_map = OccupancyGridSLAM(self.settings)
         slam_map.update((0, 0, 0), 2000)
         logger = FakeLogger()
         logger.set("attitude", (0, 0, 0))
-        gimbal = StuckGimbal(slam_map, logger, 2000)
-        explorer = DFSExplorer(None, gimbal, logger, slam_map, settings)
+        gimbal = FailedGimbal(slam_map, logger, 2000)
+        explorer = DFSExplorer(None, gimbal, logger, slam_map, self.settings)
         explorer.base_pose = (0, 0, 0)
         explorer.slam_worker = FakeSlamWorker()
 
-        with self.assertRaisesRegex(TimeoutError, "progress 98%.*relative yaw 0.0"):
+        with self.assertRaisesRegex(RuntimeError, "gimbal moveto failed: action_failed"):
             explorer._scan_for_direction((1, 0))
 
-    def test_dfs_updates_wall_grid_and_requires_fresh_clearance(self):
+    def test_dfs_updates_wall_grid_and_requires_fresh_threshold_scan(self):
         settings = copy.deepcopy(self.settings)
         settings["step_m"] = .6
         slam_map = OccupancyGridSLAM(settings)
@@ -466,9 +558,9 @@ class ExplorationTests(unittest.TestCase):
         slam_map.contains_world = unexpected_map_check
         self.assertTrue(explorer._can_step((0, 0), (1, 0)))
         self.assertEqual(explorer.wall_grid.state((0, 0), (1, 0)), "open")
-        gimbal.range_provider = 784
+        gimbal.range_provider = 300
         self.assertFalse(explorer._can_step((0, 0), (1, 0)))
-        gimbal.range_provider = 785
+        gimbal.range_provider = 301
         self.assertTrue(explorer._can_step((0, 0), (1, 0)))
         explorer._scan_for_direction = lambda delta: (0, 0)
         self.assertFalse(explorer._can_step((0, 0), (1, 0)))
@@ -480,7 +572,7 @@ class ExplorationTests(unittest.TestCase):
         self.assertEqual(GimbalMoveAction()._coordinate, COORDINATE_YCPN)
 
     def test_dfs_explores_and_backtracks_inside_a_simulated_room(self):
-        range_provider = lambda pose, yaw: self.room_range(pose, yaw, half_extent=1.6)
+        range_provider = lambda pose, yaw: self.room_range(pose, yaw, half_extent=2.0)
         slam_map = OccupancyGridSLAM(self.settings)
         slam_map.update((0, 0, 0), range_provider((0, 0, 0), 0))
         logger = FakeLogger()
@@ -500,6 +592,53 @@ class ExplorationTests(unittest.TestCase):
         self.assertAlmostEqual(slam_map.pose[0], 0.0)
         self.assertAlmostEqual(slam_map.pose[1], 0.0)
         self.assertGreater(slam_map.to_dict()["counts"]["occupied_cells"], 0)
+
+    def test_return_to_visited_cell_does_not_turn_gimbal(self):
+        settings = dict(self.settings)
+        settings["max_nodes"] = 2
+        slam_map = OccupancyGridSLAM(settings)
+        slam_map.update((0, 0, 0), 2000)
+        logger = FakeLogger()
+        logger.set("attitude", (0, 0, 0))
+        gimbal = SimulatedGimbal(slam_map, logger, 2000)
+        chassis = SimulatedChassis(slam_map, logger, gimbal, 2000)
+        explorer = DFSExplorer(chassis, gimbal, logger, slam_map, settings)
+
+        result = explorer.run(FakeSlamWorker())
+
+        self.assertEqual(result["status"], "node_limit_returned")
+        self.assertEqual(result["moves"], 2)
+        self.assertEqual(len(gimbal.commands), 5)  # Four initial directions and one forward confirmation.
+        self.assertEqual(explorer.scanned_cells, {(0, 0)})
+
+    def test_revisiting_scanned_cell_reuses_four_recorded_sides(self):
+        slam_map = OccupancyGridSLAM(self.settings)
+        slam_map.update((0, 0, 0), 2000)
+        logger = FakeLogger()
+        logger.set("attitude", (0, 0, 0))
+        gimbal = SimulatedGimbal(slam_map, logger, 2000)
+        explorer = DFSExplorer(None, gimbal, logger, slam_map, self.settings)
+        explorer.base_pose = (0, 0, 0)
+        explorer.slam_worker = FakeSlamWorker()
+
+        first = explorer._scan_all_directions((0, 0))
+        repeated = explorer._scan_all_directions((0, 0))
+
+        self.assertEqual(first, repeated)
+        self.assertEqual(len(gimbal.commands), 4)
+
+    def test_return_rejects_a_now_blocked_shared_edge_without_scanning(self):
+        settings = dict(self.settings)
+        slam_map = OccupancyGridSLAM(settings)
+        logger = FakeLogger()
+        gimbal = SimulatedGimbal(slam_map, logger, 2000)
+        explorer = DFSExplorer(None, gimbal, logger, slam_map, settings)
+        explorer.slam_worker = FakeSlamWorker()
+        explorer.wall_grid.observe((0, 0), (1, 0), .675, 600, 300, time.time())
+        self.assertTrue(explorer._can_return((1, 0), (0, 0)))
+        explorer.wall_grid.observe((1, 0), (-1, 0), .175, 100, 300, time.time())
+        self.assertFalse(explorer._can_return((1, 0), (0, 0)))
+        self.assertEqual(gimbal.commands, [])
 
     def test_slam_worker_uses_logger_streams_and_rejects_unsafe_status(self):
         timestamp = time.time()
@@ -553,30 +692,44 @@ class ExplorationTests(unittest.TestCase):
         finally:
             channel_worker.stop()
 
-        for selected_channel, expected_reading in ((1, 0),):
-            with self.subTest(channel=selected_channel):
-                invalid_settings = copy.deepcopy(self.settings)
-                invalid_settings["sensor"]["tof_channel"] = selected_channel
-                invalid_logger = FakeLogger()
-                invalid_logger.set("position", (0, 0, 0), timestamp)
-                invalid_logger.set("attitude", (0, 0, 0), timestamp)
-                invalid_logger.set("tof", (83, 0, 0, 0), timestamp)
-                invalid_logger.set("gimbal", (0, 0, 0, 0), timestamp)
-                invalid_logger.set("status", (0,) * 10, timestamp)
-                invalid_worker = SlamWorker(
-                    invalid_logger, OccupancyGridSLAM(invalid_settings), invalid_settings
-                )
-                invalid_worker.start()
-                try:
-                    with self.assertRaisesRegex(
-                        RuntimeError,
-                        f"ToF channel {selected_channel} reported {expected_reading} mm; "
-                        "a finite positive distance is required",
-                    ):
-                        invalid_worker.wait_ready(timeout_s=2)
-                    self.assertTrue(invalid_worker.abort_event.is_set())
-                finally:
-                    invalid_worker.stop()
+        invalid_settings = copy.deepcopy(self.settings)
+        invalid_settings["sensor"]["tof_channel"] = 1
+        invalid_logger = FakeLogger()
+        invalid_map = OccupancyGridSLAM(invalid_settings)
+        invalid_worker = SlamWorker(invalid_logger, invalid_map, invalid_settings)
+
+        def set_invalid_tof_inputs(reading):
+            sample_time = time.time()
+            invalid_logger.set("position", (0, 0, 0), sample_time)
+            invalid_logger.set("attitude", (0, 0, 0), sample_time)
+            invalid_logger.set("tof", (83, reading, 0, 0), sample_time)
+            invalid_logger.set("gimbal", (0, 0, 0, 0), sample_time)
+            invalid_logger.set("status", (0,) * 10, sample_time)
+
+        set_invalid_tof_inputs(0)
+        invalid_worker.start()
+        try:
+            time.sleep(.25)
+            self.assertFalse(invalid_worker.status()["ready"])
+            self.assertTrue(invalid_worker.status()["tof_waiting"])
+            self.assertFalse(invalid_worker.abort_event.is_set())
+            set_invalid_tof_inputs(321)
+            invalid_worker.wait_ready(timeout_s=2)
+            self.assertEqual(invalid_map.latest_range_mm, 321)
+            set_invalid_tof_inputs(0)
+            time.sleep(.25)
+            self.assertTrue(invalid_worker.status()["tof_waiting"])
+            self.assertEqual(invalid_map.scan_count, 1)
+            self.assertFalse(invalid_worker.abort_event.is_set())
+            set_invalid_tof_inputs(456)
+            for _ in range(20):
+                if invalid_map.scan_count == 2:
+                    break
+                time.sleep(.05)
+            self.assertEqual(invalid_map.latest_range_mm, 456)
+            self.assertFalse(invalid_worker.status()["tof_waiting"])
+        finally:
+            invalid_worker.stop()
 
         unsafe_logger = FakeLogger()
         unsafe_logger.set("position", (0, 0, 0), timestamp)
@@ -596,6 +749,38 @@ class ExplorationTests(unittest.TestCase):
             self.assertTrue(unsafe_worker.abort_event.is_set())
         finally:
             unsafe_worker.stop()
+
+    def test_persistent_zero_tof_stops_after_valid_scan_becomes_stale(self):
+        settings = copy.deepcopy(self.settings)
+        settings["max_sample_age_s"] = .3
+        settings["update_hz"] = 20
+        logger = FakeLogger()
+
+        def set_samples(reading):
+            sample_time = time.time()
+            logger.set("position", (0, 0, 0), sample_time)
+            logger.set("attitude", (0, 0, 0), sample_time)
+            logger.set("tof", (reading, 0, 0, 0), sample_time)
+            logger.set("gimbal", (0, 0, 0, 0), sample_time)
+            logger.set("status", (0,) * 10, sample_time)
+
+        set_samples(500)
+        slam_map = OccupancyGridSLAM(settings)
+        worker = SlamWorker(logger, slam_map, settings)
+        worker.start()
+        try:
+            worker.wait_ready(timeout_s=2)
+            set_samples(0)
+            for _ in range(30):
+                if worker.status()["error"]:
+                    break
+                time.sleep(.025)
+            self.assertEqual(worker.status()["error"],
+                             "valid ToF data became stale during exploration")
+            self.assertTrue(worker.abort_event.is_set())
+            self.assertEqual(slam_map.latest_range_mm, 500)
+        finally:
+            worker.stop()
 
     def test_real_logger_streams_feed_slam_and_preserve_four_tof_csv_columns(self):
         chassis_module = FakeSDKModule()

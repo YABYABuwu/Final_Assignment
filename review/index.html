@@ -357,6 +357,30 @@
       const wallPanel=document.getElementById("wall-grid-review"); wallPanel.replaceChildren();
       const wallGrid=run.summary.exploration?.cell_grid;
       if (wallGrid?.cells?.length) {
+        const scanned=run.summary.exploration?.scanned_cells;
+        if (run.summary.exploration?.heading_source === "gimbal") {
+          const note=document.createElement("p");
+          note.textContent="การเดิน DFS ใช้ yaw จากมุม gimbal อ้างอิงพื้นลบมุมเทียบตัวรถ (ปรับศูนย์ครั้งแรกกับ yaw chassis)";
+          wallPanel.append(note);
+        }
+        if (Array.isArray(scanned)) {
+          const note=document.createElement("p");
+          note.textContent=`สแกนสี่ทิศ ${scanned.length} ช่อง · กลับช่องเดิมใช้ขอบที่บันทึกไว้`;
+          wallPanel.append(note);
+        }
+        const alignments=run.summary.exploration?.alignments;
+        if (run.summary.exploration?.alignment_enabled === false) {
+          const note=document.createElement("p"); note.textContent="จัดกลางช่อง: ปิด"; wallPanel.append(note);
+        }
+        if (alignments && Object.keys(alignments).length) {
+          const note=document.createElement("p");
+          note.textContent="จัดกลางช่องจากระยะกึ่งกลางรถถึงกำแพง: "+Object.entries(alignments).map(([cell,result])=>{
+            const distances=Object.entries(result.after_m || result.walls || {})
+              .map(([side,distance])=>`${side} ${(distance*100).toFixed(1)} ซม.`).join(", ");
+            return `${cell} ${result.status === "moved" ? "ขยับแล้ว" : result.status === "no_wall" ? "ไม่พบกำแพง" : "อยู่ในเกณฑ์"}${distances ? ` (${distances})` : ""}`;
+          }).join(" · ");
+          wallPanel.append(note);
+        }
         const table=document.createElement("table"); table.style.width="100%";
         const header=document.createElement("tr");
         ["ช่อง", "หน้า +X", "ซ้าย −Y", "หลัง −X", "ขวา +Y"].forEach(label=>{const th=document.createElement("th");th.textContent=label;header.append(th);});table.append(header);
@@ -365,7 +389,10 @@
           const name=document.createElement("td"); name.textContent=cell.index.join(","); row.append(name);
           for (const side of ["x+","y-","x-","y+"]) {
             const td=document.createElement("td"), info=cell.sides[side];
-            td.textContent=info.state==="wall"?"กำแพง":info.state==="open"?(info.clearance_ok===false?"เปิด / ระยะไม่พอ":"เปิด"):"ยังไม่รู้";
+            const state=info.state==="wall"?"กำแพง":info.state==="open"?(info.clearance_ok===false && info.wall_threshold_mm == null?"เปิด / ระยะไม่พอ (รันเก่า)":"เปิด"):"ยังไม่รู้";
+            const reading=info.wall_threshold_mm != null && info.range_mm != null ? ` · ${info.range_mm.toFixed(0)} มม. / เกณฑ์ ${info.wall_threshold_mm.toFixed(0)} มม.` : "";
+            const source=info.source==="inferred"?" · อนุมานจากช่องไกล":info.source==="direct"&&info.measured_from?.join(",")!==cell.index.join(",")?` · วัดจากช่อง ${info.measured_from?.join(",")}`:"";
+            td.textContent=state+reading+source;
             row.append(td);
           }
           table.append(row);

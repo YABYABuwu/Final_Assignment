@@ -78,8 +78,8 @@
         <div class="map-wrap">
           <label class="muted"><input id="fine-map" type="checkbox"> แสดง occupancy ละเอียด</label>
           <canvas id="map" aria-label="เส้นทาง ตำแหน่ง และทิศหุ่นยนต์"></canvas>
-          <div class="map-legend"><span class="key" style="--key:#8cf1d2">ขอบทางเปิด</span><span class="key" style="--key:#ffb868">กำแพง</span><span class="key" style="--key:#718594">เส้นประ: ยังไม่รู้</span><span class="key" style="--key:#69d9ff">เส้นทาง</span></div>
-          <div class="map-info"><div>DFS&nbsp; <strong id="dfs-status">ปิด</strong></div><div id="map-counts">รอข้อมูลแผนที่</div><div id="pose">X — · Y — · Yaw —</div><div>ความเร็ว&nbsp; <strong id="speed">— m/s</strong></div><div>Gimbal&nbsp; <span id="gimbal-map">—</span></div><div>DFS เลือกขอบทางเปิดของกริด</div><div>ทิศแผนที่: ↑ +X เหนือ · ↓ −X ใต้ · → +Y ตะวันออก</div><div id="tof-model">ToF: —</div><div id="cell-sides"></div><div id="map-message"></div></div>
+          <div class="map-legend"><span class="key" style="--key:#8cf1d2">ขอบทางเปิด</span><span class="key" style="--key:#ffb868">กำแพง</span><span class="key" style="--key:#718594">เส้นประ: ยังไม่รู้/อนุมาน</span><span class="key" style="--key:#69d9ff">เส้นทาง</span></div>
+          <div class="map-info"><div>DFS&nbsp; <strong id="dfs-status">ปิด</strong></div><div id="map-counts">รอข้อมูลแผนที่</div><div id="pose">X — · Y — · Yaw —</div><div>ความเร็ว&nbsp; <strong id="speed">— m/s</strong></div><div>Gimbal&nbsp; <span id="gimbal-map">—</span></div><div>DFS เลือกขอบทางเปิดจาก ToF ที่สแกนใหม่</div><div>ทิศแผนที่: ↑ +X เหนือ · ↓ −X ใต้ · → +Y ตะวันออก</div><div id="tof-model">ToF: —</div><div id="cell-sides"></div><div id="map-message"></div></div>
         </div>
       </section>
     </div>
@@ -262,9 +262,10 @@
           }
           for (const [name, ends] of Object.entries(endpoints)) {
             const state = c.sides[name]?.state || "unknown";
+            const inferred = c.sides[name]?.source === "inferred";
             ctx.strokeStyle = state === "wall" ? "#ffb868" : state === "open" ? "#8cf1d255" : "#718594";
             ctx.lineWidth = state === "wall" ? 4 : 1;
-            ctx.setLineDash(state === "unknown" ? [4,4] : []);
+            ctx.setLineDash(state === "unknown" ? [4,4] : inferred ? [6,3] : []);
             ctx.beginPath(); ctx.moveTo(...project(gridPoint(ix+ends[0][0],iy+ends[0][1]))); ctx.lineTo(...project(gridPoint(ix+ends[1][0],iy+ends[1][1]))); ctx.stroke();
           }
           ctx.setLineDash([]);
@@ -276,8 +277,20 @@
         const labels={"x+":"หน้า +X", "y-":"ซ้าย −Y", "x-":"หลัง −X", "y+":"ขวา +Y"};
         document.getElementById("cell-sides").textContent = `ช่อง ${grid.current?.join(",")} · ${grid.cell_size_m.toFixed(2)} ม. · ` + Object.entries(labels).map(([key,label]) => {
           const side=current?.sides[key]; const state=side?.state;
-          return `${label}: ${state === "wall" ? "กำแพง" : state === "open" ? (side?.clearance_ok === false ? "เปิด แต่ระยะไม่พอ" : "เปิด") : "ยังไม่รู้"}`;
+          const reading = side?.wall_threshold_mm != null && side?.range_mm != null ? ` (${side.range_mm.toFixed(0)} มม.; เกณฑ์ ${side.wall_threshold_mm.toFixed(0)} มม.)` : "";
+          const source = side?.source === "inferred" ? " · อนุมานจากช่องไกล" :
+            side?.source === "direct" && side.measured_from?.join(",") !== grid.current?.join(",") ? ` · วัดจากช่อง ${side.measured_from?.join(",")}` : "";
+          return `${label}: ${state === "wall" ? "กำแพง" : state === "open" ? (side?.clearance_ok === false && side?.wall_threshold_mm == null ? "เปิด แต่ระยะไม่พอ (รันเก่า)" : "เปิด") : "ยังไม่รู้"}${reading}${source}`;
         }).join(" · ");
+        const alignment=map.exploration?.alignments?.[grid.current?.join(",")];
+        if (alignment) {
+          const distances=Object.entries(alignment.after_m || alignment.walls || {})
+            .map(([side,distance]) => `${side} ${(distance*100).toFixed(1)} ซม.`).join(", ");
+          document.getElementById("cell-sides").textContent +=
+            ` · จัดกลางช่อง: ${alignment.status === "moved" ? "ขยับแล้ว" : alignment.status === "no_wall" ? "ไม่พบกำแพง" : "อยู่ในเกณฑ์"}`+
+            (distances ? ` (${distances}; เป้าหมาย ${(alignment.target_distance_m*100).toFixed(0)} ซม.)` : "");
+        } else if (map.exploration?.alignment_enabled === false)
+          document.getElementById("cell-sides").textContent += " · จัดกลางช่อง: ปิด";
       } else document.getElementById("cell-sides").textContent="ยังไม่มีกริดกำแพงจากการสแกนครบด้าน";
       const route = map.trajectory || [];
       if (route.length) {
@@ -327,10 +340,20 @@
       document.getElementById("map-counts").textContent = hasWalls && !showFine ? `${grid.cells.length} ช่อง · ${wallCount} ขอบกำแพง` : `ว่าง ${counts.free_cells ?? 0} · กีดขวาง ${counts.occupied_cells ?? 0} · ไม่รู้จัก ${counts.unknown_cells ?? 0}`;
       const dfsStatus = map.exploration?.status || "แสดงแผนที่";
       const scanProgress = /^scanning_(\d+)_of_(\d+)$/.exec(dfsStatus);
+      const backtrackTarget = /^backtracking_to_(-?\d+)_(-?\d+)$/.exec(dfsStatus);
       document.getElementById("dfs-status").textContent = scanProgress ? `สแกน ${scanProgress[1]}/${scanProgress[2]} ทิศ` :
-        dfsStatus === "waiting_gimbal_action" ? "รอ SDK ยืนยันว่าหัวหมุนเสร็จ" : dfsStatus;
+        backtrackTarget ? `กลับช่อง ${backtrackTarget[1]},${backtrackTarget[2]} · ใช้ขอบที่บันทึกไว้` :
+        dfsStatus === "returning_to_start" ? "กลับจุดเริ่ม · ใช้ขอบที่บันทึกไว้" :
+        dfsStatus === "waiting_gimbal_action" ? "รอ SDK ยืนยันว่าหัวหมุนเสร็จ" :
+        dfsStatus === "waiting_slam_scan" ? "รอข้อมูล SLAM ใหม่หลังเดิน" :
+        dfsStatus === "aligning" ? "จัดตำแหน่งกลางช่องจากกำแพง" : dfsStatus;
       document.getElementById("map-message").textContent = map.exploration?.error || `scan ${map.scan_count ?? 0} · match ${map.localization_score ?? "—"}`;
-      document.getElementById("pose").textContent = map.pose ? `X ${number(map.pose[0])} · Y ${number(map.pose[1])} · Yaw ${number(map.pose[2])}°` : "รอ pose จาก SLAM";
+      let poseText = map.pose ? `X ${number(map.pose[0])} · Y ${number(map.pose[1])} · Yaw chassis ${number(map.pose[2])}°` : "รอ pose จาก SLAM";
+      if (map.exploration?.heading_source === "gimbal" && latest.gimbal?.length >= 4) {
+        const yawEstimate=((Number(latest.gimbal[3])-Number(latest.gimbal[1])+540)%360)-180;
+        if (Number.isFinite(yawEstimate)) poseText += ` · Yaw จาก gimbal ≈ ${number(yawEstimate)}°`;
+      }
+      document.getElementById("pose").textContent = poseText;
     }
 
     async function refreshMap() {
@@ -469,6 +492,7 @@
         document.getElementById("dfs-status").textContent = status.exploration?.status || (status.slam ? (status.slam.ready ? "SLAM ready" : "SLAM waiting") : "ปิด");
         if (status.slam?.error) document.getElementById("map-message").textContent = `หยุด SLAM: ${status.slam.error}`;
         drawMap();
+        if (status.slam?.tof_waiting && !status.slam.error) document.getElementById("map-message").textContent = "รอ ToF ค่าที่ใช้ได้ · ยังไม่ใช้ 0 มม. ตัดสินใจเดิน";
       } catch (error) {
         document.getElementById("connection").textContent = "● ขาดการเชื่อมต่อ";
       } finally { busy = false; }

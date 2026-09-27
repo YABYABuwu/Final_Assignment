@@ -59,6 +59,7 @@ def main():
             motion_settings["max_speed_m_s"] = min(
                 motion_settings["max_speed_m_s"], exploration_settings["max_speed_m_s"]
             )
+            motion_settings["heading_source"] = exploration_settings["heading_source"]
         chassis = ChassisController(ep_robot, logger, motion_settings)
         if exploration_settings["enabled"]:
             slam_worker = SlamWorker(logger, slam_map, exploration_settings)
@@ -78,12 +79,12 @@ def main():
         if exploration_settings["enabled"]:
             if dashboard is not None:
                 dashboard.mission_status = "SLAM readying"
-            logger.wait_for("position", exploration_settings["sample_timeout_s"])
-            logger.wait_for("attitude", exploration_settings["sample_timeout_s"])
-            logger.wait_for("tof", exploration_settings["sample_timeout_s"])
-            logger.wait_for("gimbal", exploration_settings["sample_timeout_s"])
-            logger.wait_for("status", exploration_settings["sample_timeout_s"])
-            slam_worker.wait_ready(exploration_settings["sample_timeout_s"] * 4)
+            logger.wait_for("position")
+            logger.wait_for("attitude")
+            logger.wait_for("tof")
+            logger.wait_for("gimbal")
+            logger.wait_for("status")
+            slam_worker.wait_ready()
             explorer.run(slam_worker)
             slam_worker.stop(map_settings["save_path"])
             if dashboard is not None:

@@ -3,18 +3,18 @@ connection:
   type: ap                 # ap = ต่อ Wi-Fi ของหุ่นยนต์; sta = ผ่านเราเตอร์; rndis = USB
 
 motion:
-  position_tolerance_m: 0.05  # ถือว่าถึงจุดเมื่อห่างไม่เกิน 5 ซม.
-  angle_tolerance_deg: 3      # ยอมให้มุมคลาดเคลื่อนได้ 3 องศา
+  position_tolerance_m: 0.015  # ถือว่าถึงจุดเมื่อห่างไม่เกิน 5 ซม.
+  angle_tolerance_deg: 1      # ยอมให้มุมคลาดเคลื่อนได้ 3 องศา
   timeout_s: 15               # เวลาสูงสุดต่อ waypoint
   sample_timeout_s: 1.0       # หาก position/attitude เก่ากว่านี้ ให้หยุด
   control_period_s: 0.1       # ระยะเวลาระหว่างคำสั่งความเร็ว
-  max_speed_m_s: 0.50         # เพดานความเร็วรวมของแกน x/y
+  max_speed_m_s: 0.4         # เพดานความเร็วรวมของแกน x/y
   max_turn_deg_s: 45          # เพดานความเร็วหมุน
   hold_heading: true          # yaw: null = รักษามุมเดิมข้าม waypoint ไม่ให้ drift สะสม
   pid:
-    x: {kp: 0.9, ki: 0.0, kd: 0.0}    # ควบคุมตำแหน่งแกน x
-    y: {kp: 0.9, ki: 0.0, kd: 0.0}    # ควบคุมตำแหน่งแกน y
-    yaw: {kp: 1.2, ki: 0.0, kd: 0.0}  # ควบคุมมุมตัวรถ
+    x: {kp: 0.9, ki: 0.1, kd: 0.01}    # ควบคุมตำแหน่งแกน x
+    y: {kp: 0.9, ki: 0.1, kd: 0.01}    # ควบคุมตำแหน่งแกน y
+    yaw: {kp: 1.2, ki: 0.1, kd: 0.01}  # ควบคุมมุมตัวรถ
 
 logging:
   directory: data/raw      # โฟลเดอร์ CSV; อ้างอิงจาก TemplateProject
@@ -26,12 +26,12 @@ logging:
   # enabled = รับข้อมูลมาใช้, save = เขียน CSV; frequency_hz ต้องเป็น 1/5/10/20/50
   # position กับ attitude จำเป็นสำหรับ move_to แม้ตั้ง save: false
   streams:
-    position: {enabled: true, save: true, frequency_hz: 10}
+    position: {enabled: true, save: true, frequency_hz: 20}
     attitude: {enabled: true, save: true, frequency_hz: 10}
     imu:      {enabled: false, save: false, frequency_hz: 10}
     esc:      {enabled: false, save: false, frequency_hz: 10}
     status:   {enabled: true, save: true, frequency_hz: 5}
-    tof:      {enabled: true, save: true, frequency_hz: 5}
+    tof:      {enabled: true, save: true, frequency_hz: 20}
     adapter:  {enabled: false, save: false, frequency_hz: 10}
     battery:  {enabled: true, save: true, frequency_hz: 1}
     gimbal:   {enabled: true, save: true, frequency_hz: 5}
@@ -53,19 +53,29 @@ review:
 mission:
   enabled: false          # เริ่มจาก false เพื่อไม่ให้รถวิ่งทันทีเมื่อทดสอบการเชื่อมต่อ
   waypoints:              # พิกัดสัมบูรณ์จากตำแหน่งเริ่มต้น; yaw: null = รักษาทิศเดิม
-    - {x: 0.5, y: 0.0, yaw: null}  # ไปข้างหน้า
-    - {x: 0.5, y: 0.5, yaw: null}  # สไลด์ขวาและรักษาทิศเดิม
+    - {x: 0.6, y: 0.0, yaw: null}
+    - {x: 1.2, y: 0.0, yaw: null}
+    - {x: 1.8, y: 0.0, yaw: null}
+    - {x: 1.8, y: 0.6, yaw: null}
+    - {x: 1.2, y: 0.6, yaw: null}
+    - {x: 0.6, y: 0.6, yaw: null}
+
 
 exploration:
-  enabled: false        # เปิดหลังสอบเทียบตำแหน่งแกน yaw; true = เริ่ม SLAM + DFS และสั่งรถเดิน
+  enabled: true       # เปิดหลังสอบเทียบตำแหน่งแกน yaw/pivot และระยะหัว ToF; true = เริ่ม SLAM + DFS และสั่งรถเดิน
   position_coordinate_system: 1 # ผูกแผนที่กับพิกัดตั้งแต่เปิดหุ่นยนต์ เพื่อให้โหลดแผนที่เดิมได้ในรอบเปิดเครื่องเดียวกัน
   step_m: 0.60            # ขนาดช่องกริดกำแพง และระยะเดินระหว่างศูนย์กลางช่อง
   max_speed_m_s: 0.20     # จำกัดความเร็วขณะสำรวจแยกจาก mission waypoint
-  robot_radius_m: 0.20    # รัศมีกรอบหุ่นยนต์สำหรับตรวจทางผ่าน
-  clearance_margin_m: 0.06
+  heading_source: gimbal  # ใช้ yaw_ground - yaw_relative ระหว่างเดิน; attitude = ใช้ yaw chassis อย่างเดียว
+  wall_threshold_mm: 500 # ToF <= ค่านี้เป็นกำแพง; มากกว่านี้เป็นทางเปิด
+  alignment:
+    enabled: false        # false = สแกนกำแพงตามปกติ แต่ไม่ขยับจัดกลางช่อง
+    wall_distance_m: 0.15 # ระยะจากกึ่งกลาง chassis ถึงกำแพงที่ต้องการ
+    tolerance_m: 0.03     # ไม่ขยับถ้าคลาดไม่เกิน 3 ซม.
+    max_shift_m: 0.10     # หยุดเมื่อการจัดตำแหน่งต้องขยับเกินค่านี้
   max_nodes: 120           # จำกัดจำนวนช่องที่ DFS จะเข้าเยี่ยมต่อรอบ
   update_hz: 5
-  sample_timeout_s: 1.0
+  max_sample_age_s: 1.0 # อายุสูงสุดของข้อมูลที่ใช้ตัดสินใจ; ไม่ใช่เวลารองาน
   sample_skew_s: 0.25
   sensor:
     tof_channel: 0         # ดัชนีใน sub_distance เริ่มนับจาก 0 (ช่องที่ใช้จริง)
@@ -78,9 +88,6 @@ exploration:
     pitch_deg: 0.0
     yaw_speed_deg_s: 60
     angle_tolerance_deg: 3
-    move_timeout_s: 3.0
-    action_timeout_s: 8.0 # เวลารอ SDK แจ้ง action จบเพิ่มเติมหลังเวลาหมุน
-    scan_timeout_s: 2.0
   map:
     resolution_m: 0.05
     width_m: 8.0

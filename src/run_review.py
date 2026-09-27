@@ -115,6 +115,7 @@ class RunStore:
             last_time = None
             active_flags = {}
             tof_was_close = False
+            tof_was_invalid = False
             stream_frequency = summary.get("stream_settings", {}).get(name_of_stream, {}).get("frequency_hz")
             gap_limit = max(1.5, 3 / stream_frequency) if isinstance(stream_frequency, (int, float)) and stream_frequency > 0 else 1.5
 
@@ -154,6 +155,11 @@ class RunStore:
 
                     if name_of_stream == "tof" and values:
                         distance = values[0]
+                        invalid = distance == 0
+                        if invalid and not tof_was_invalid and len(issues) < 80:
+                            issues.append({"level": "warning", "time_s": round(elapsed, 2),
+                                           "message": "ToF #0 returned 0 mm; scan skipped"})
+                        tof_was_invalid = invalid
                         close = isinstance(distance, (int, float)) and 0 < distance < self.close_tof_mm
                         if close and not tof_was_close and len(issues) < 80:
                             issues.append({"level": "warning", "time_s": round(elapsed, 2),

@@ -37,8 +37,8 @@ def _line_cells(x0, y0, x1, y1):
 class CellWallGrid:
     """Discrete occupancy on shared cell borders, fed only by settled scans.
 
-    Maze walls are snapped to the nearest border along a cardinal ray. Raw
-    clearance is retained separately so snapping cannot make a short ray safe.
+    The current border uses a direct ToF wall threshold. Farther borders
+    retain the ray's snapped wall position for map visualization.
     """
 
     DIRECTIONS = ((1, 0), (0, -1), (-1, 0), (0, 1))
@@ -59,29 +59,41 @@ class CellWallGrid:
     def state(self, node, delta):
         return self.edges.get(self.edge_key(node, delta), {}).get("state", "unknown")
 
-    def observe(self, node, delta, hit_distance_m, range_mm, required_range_m, timestamp):
+    def observe(self, node, delta, hit_distance_m, range_mm, wall_threshold_mm, timestamp):
         if delta not in self.DIRECTIONS or not math.isfinite(hit_distance_m):
             raise ValueError("wall grid observation needs a cardinal, finite ray")
         self.cells.add(tuple(node))
         wall_index = max(0, int(math.floor(hit_distance_m / self.cell_size_m)))
-        for index in range(min(wall_index + 1, self.max_ray_cells)):
+        ray_cells = 1 if range_mm <= wall_threshold_mm else min(wall_index + 1, self.max_ray_cells)
+        for index in range(ray_cells):
             current = (node[0] + index * delta[0], node[1] + index * delta[1])
             key = self.edge_key(current, delta)
             self.cells.update(key)
-            self.edges[key] = {
-                "state": "wall" if index == wall_index else "open",
-                "observed_at": timestamp,
-            }
+            if index == 0:
+                self.edges[key] = {
+                    "state": "wall" if range_mm <= wall_threshold_mm else "open",
+                    "source": "direct",
+                    "measured_from": list(node),
+                    "range_mm": range_mm,
+                    "wall_threshold_mm": wall_threshold_mm,
+                    "observed_at": timestamp,
+                }
+            elif self.edges.get(key, {}).get("source") != "direct":
+                self.edges[key] = {
+                    "state": "wall" if index == wall_index else "open",
+                    "source": "inferred",
+                    "observed_at": timestamp,
+                }
         self.checks[(tuple(node), delta)] = {
             "range_mm": range_mm,
-            "required_range_mm": required_range_m * 1000.0,
-            "clearance_ok": range_mm / 1000.0 + 1e-9 >= required_range_m,
+            "wall_threshold_mm": wall_threshold_mm,
             "observed_at": timestamp,
         }
 
     def can_cross(self, node, delta):
         return (self.state(node, delta) == "open" and
-                self.checks.get((tuple(node), delta), {}).get("clearance_ok", False))
+                self.checks.get((tuple(node), delta), {}).get("range_mm", 0) >
+                self.checks.get((tuple(node), delta), {}).get("wall_threshold_mm", float("inf")))
 
     def snapshot(self, base_pose, current):
         return {
@@ -89,8 +101,8 @@ class CellWallGrid:
             "base_pose": list(base_pose) if base_pose is not None else None,
             "current": list(current) if current is not None else None,
             "cells": [{"index": list(node), "sides": {
-                name: {"state": self.state(node, delta),
-                       **self.checks.get((node, delta), {})}
+                name: {**self.edges.get(self.edge_key(node, delta), {"state": "unknown"}),
+                       "checked_from_here": (node, delta) in self.checks}
                 for name, delta in zip(self.SIDE_NAMES, self.DIRECTIONS)
             }} for node in sorted(self.cells)],
         }
@@ -125,6 +137,17 @@ class CellWallGrid:
                 side = cell["sides"].get(name)
                 if not isinstance(side, dict) or side.get("state") not in ("unknown", "open", "wall"):
                     raise ValueError("invalid cell wall grid side")
+                if ("source" in side and side["source"] not in ("direct", "inferred")):
+                    raise ValueError("invalid cell wall grid source")
+                if ("checked_from_here" in side and type(side["checked_from_here"]) is not bool):
+                    raise ValueError("invalid cell wall grid check flag")
+                if ("measured_from" in side and not pair(side["measured_from"])):
+                    raise ValueError("invalid cell wall grid measurement origin")
+                for field in ("range_mm", "wall_threshold_mm", "observed_at"):
+                    if field in side and (type(side[field]) not in (int, float) or
+                                          not math.isfinite(side[field]) or
+                                          (field != "observed_at" and side[field] <= 0)):
+                        raise ValueError(f"invalid cell wall grid {field}")
                 key = cls.edge_key(node, delta)
                 if key in edges and edges[key] != side["state"]:
                     raise ValueError("inconsistent shared cell wall")
@@ -634,7 +657,7 @@ class SlamWorker:
 
     def _run(self):
         period = 1.0 / self.settings["update_hz"]
-        max_age = self.settings["sample_timeout_s"]
+        max_age = self.settings["max_sample_age_s"]
         while not self.stop_event.is_set():
             started = time.monotonic()
             try:
@@ -664,19 +687,17 @@ class SlamWorker:
                                   gimbal_timestamp, status[1])
                     synchronized = max(timestamps) - min(timestamps) <= self.settings["sample_skew_s"]
                     if synchronized and timestamp != self.last_tof_timestamp:
-                        if not self.map.scan_is_valid(reading_mm, gimbal_yaw_deg):
-                            raise ValueError(
-                                f"ToF channel {channel} reported {reading_mm!r} mm; "
-                                "a finite positive distance is required"
-                            )
-                        pose = (position[0][0], position[0][1], attitude[0][0])
-                        self.map.update(pose, reading_mm, timestamp=timestamp,
-                                        gimbal_yaw_deg=gimbal_yaw_deg)
-                        self.last_tof_timestamp = timestamp
-                        self.last_good_scan_monotonic = time.monotonic()
-                        self.ready.set()
-                        with self.lock:
-                            self.error = None
+                        if self.map.scan_is_valid(reading_mm, gimbal_yaw_deg):
+                            pose = (position[0][0], position[0][1], attitude[0][0])
+                            self.map.update(pose, reading_mm, timestamp=timestamp,
+                                            gimbal_yaw_deg=gimbal_yaw_deg)
+                            self.last_tof_timestamp = timestamp
+                            self.last_good_scan_monotonic = time.monotonic()
+                            self.ready.set()
+                            with self.lock:
+                                self.error = None
+                        elif self.ready.is_set() and self._scan_stale():
+                            self._fail("valid ToF data became stale during exploration")
                     elif self.ready.is_set() and self._scan_stale():
                         self._fail("pose, gimbal, status and ToF timestamps did not stay synchronized")
                 elif self.ready.is_set() and self._scan_stale():
@@ -689,7 +710,7 @@ class SlamWorker:
 
     def _scan_stale(self):
         reference = self.last_good_scan_monotonic or self.started_at or time.monotonic()
-        return time.monotonic() - reference > self.settings["sample_timeout_s"]
+        return time.monotonic() - reference > self.settings["max_sample_age_s"]
 
     def _fail(self, message):
         with self.lock:
@@ -699,22 +720,23 @@ class SlamWorker:
         self.abort_event.set()
         self.stop_event.set()
 
-    def wait_ready(self, timeout_s=5.0):
-        deadline = time.monotonic() + timeout_s
+    def wait_ready(self, timeout_s=None):
+        deadline = None if timeout_s is None else time.monotonic() + timeout_s
         while not self.ready.is_set():
             with self.lock:
                 error = self.error
             if error:
                 raise RuntimeError(error)
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
+            if self.stop_event.is_set():
+                raise RuntimeError("SLAM worker stopped before the first valid scan")
+            if deadline is not None and time.monotonic() >= deadline:
                 raise TimeoutError("SLAM did not receive synchronized pose, gimbal, status and ToF data")
-            self.ready.wait(min(0.1, remaining))
+            self.ready.wait(0.1)
 
     def stop(self, save_path=None):
         self.stop_event.set()
         if self.thread is not None:
-            self.thread.join(timeout=3)
+            self.thread.join()
             self.thread = None
         self.is_running = False
         if save_path:
@@ -723,4 +745,9 @@ class SlamWorker:
     def status(self):
         with self.lock:
             error = self.error
-        return {"running": self.is_running, "ready": self.ready.is_set(), "error": error}
+        tof = self.logger.get_sample("tof", max_age_s=self.settings["max_sample_age_s"])
+        channel = int(self.settings["sensor"]["tof_channel"])
+        tof_waiting = (tof is None or len(tof[0]) <= channel or
+                       self.map._range_value(tof[0][channel]) is None)
+        return {"running": self.is_running, "ready": self.ready.is_set(),
+                "error": error, "tof_waiting": tof_waiting}

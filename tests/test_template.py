@@ -48,6 +48,8 @@ class TemplateTests(unittest.TestCase):
         self.assertEqual(angle_error(-179, 179), 2)
         self.assertTrue(config["dashboard"]["enabled"])
         self.assertEqual(config["exploration"]["sensor"]["tof_channel"], 0)
+        self.assertGreater(config["exploration"]["wall_threshold_mm"], 0)
+        self.assertIsInstance(config["exploration"]["alignment"]["enabled"], bool)
         self.assertNotIn("min_range_m", config["exploration"]["map"])
         self.assertNotIn("max_range_m", config["exploration"]["map"])
 
@@ -276,6 +278,58 @@ class TemplateTests(unittest.TestCase):
         with self.assertRaises(TimeoutError):
             chassis.move_to(1, 0, timeout_s=0.01)
         self.assertEqual(module.commands[0]["z"], 0)
+
+    def test_move_to_corrects_yaw_inside_arrival_tolerance_while_sliding(self):
+        module = FakeModule()
+        motion = load_config()["motion"]
+        motion["control_period_s"] = 0.001
+        chassis = ChassisController(SimpleNamespace(chassis=module), None, motion)
+        chassis.get_pose = lambda: (0, 0, 0.5)
+
+        with self.assertRaises(TimeoutError):
+            chassis.move_to(0, 1, yaw=0, timeout_s=0.01)
+
+        moving = [command for command in module.commands if command["y"] > 0]
+        self.assertTrue(moving)
+        self.assertTrue(all(command["z"] < 0 for command in moving))
+        self.assertEqual(module.commands[-1], {"x": 0, "y": 0, "z": 0})
+
+    def test_gimbal_heading_tracks_rotation_missing_from_chassis_attitude(self):
+        motion = load_config()["motion"]
+        motion["heading_source"] = "gimbal"
+        samples = {"position": (0, 0, 0), "attitude": (0, 0, 0),
+                   "gimbal": (0, 0, 0, 0)}
+        logger = SimpleNamespace(
+            get_latest=lambda name, max_age_s=None: samples.get(name),
+            get_sample=lambda name, max_age_s=None: (samples[name], 1.0)
+            if name in samples else None,
+        )
+        chassis = ChassisController(SimpleNamespace(chassis=FakeModule()), logger, motion)
+        self.assertAlmostEqual(chassis.get_pose()[2], 0)
+
+        # The relative and ground gimbal angles change by different amounts
+        # when the chassis turns; attitude incorrectly remains at zero.
+        samples["gimbal"] = (0, -90, 0, -85)
+        self.assertAlmostEqual(chassis.get_pose()[2], 5)
+        motion["control_period_s"] = .001
+        with self.assertRaises(TimeoutError):
+            chassis.move_to(1, 0, yaw=0, timeout_s=.01)
+        self.assertTrue(any(command["z"] < 0 for command in chassis.chassis.commands))
+        samples.pop("gimbal")
+        self.assertIsNone(chassis.get_pose())
+
+    def test_move_to_can_wait_for_dfs_arrival_without_deadline(self):
+        module = FakeModule()
+        motion = load_config()["motion"]
+        motion["timeout_s"] = 0.005
+        motion["control_period_s"] = 0.001
+        chassis = ChassisController(SimpleNamespace(chassis=module), None, motion)
+        poses = iter([(0, 0, 0)] * 30 + [(1, 0, 0)])
+        chassis.get_pose = lambda: next(poses, (1, 0, 0))
+
+        self.assertEqual(chassis.move_to(1, 0, disable_timeout=True), (1, 0, 0))
+        self.assertGreaterEqual(len(module.commands), 31)
+        self.assertEqual(module.commands[-1], {"x": 0, "y": 0, "z": 0})
 
 
 if __name__ == "__main__":

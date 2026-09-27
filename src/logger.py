@@ -192,10 +192,12 @@ class SensorLogger:
             cursor = self.sample_id
         return {"cursor": cursor, "streams": streams}
 
-    def wait_for(self, name, timeout_s=3.0):
-        """Wait for the first sample and return it; raise on timeout."""
-        deadline = time.monotonic() + timeout_s
-        while time.monotonic() < deadline:
+    def wait_for(self, name, timeout_s=None):
+        """Wait for the first sample; an explicit timeout_s bounds the wait."""
+        deadline = None if timeout_s is None else time.monotonic() + timeout_s
+        while deadline is None or time.monotonic() < deadline:
+            if not self.accepting:
+                raise RuntimeError("sensor logger stopped before receiving data")
             sample = self.get_latest(name)
             if sample is not None:
                 return sample

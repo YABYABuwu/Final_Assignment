@@ -94,17 +94,32 @@ def load_config(path=DEFAULT_CONFIG):
         raise ValueError("exploration.enabled must be true or false")
     if type(exploration.get("position_coordinate_system")) is not int or exploration["position_coordinate_system"] not in (0, 1):
         raise ValueError("exploration.position_coordinate_system must be 0 or 1")
-    for name in ("step_m", "max_speed_m_s", "robot_radius_m", "clearance_margin_m",
-                 "sample_timeout_s", "sample_skew_s", "update_hz"):
+    for name in ("step_m", "max_speed_m_s", "wall_threshold_mm",
+                 "max_sample_age_s", "sample_skew_s", "update_hz"):
         value = exploration.get(name)
         if not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
             raise ValueError(f"exploration.{name} must be a positive number")
-    if exploration["sample_skew_s"] > exploration["sample_timeout_s"]:
-        raise ValueError("exploration.sample_skew_s cannot exceed sample_timeout_s")
+    if exploration["sample_skew_s"] > exploration["max_sample_age_s"]:
+        raise ValueError("exploration.sample_skew_s cannot exceed max_sample_age_s")
     if exploration["update_hz"] > 50:
         raise ValueError("exploration.update_hz cannot exceed 50 Hz")
     if exploration["max_speed_m_s"] > motion["max_speed_m_s"]:
         raise ValueError("exploration.max_speed_m_s cannot exceed motion.max_speed_m_s")
+    if exploration.get("heading_source") not in ("gimbal", "attitude"):
+        raise ValueError("exploration.heading_source must be gimbal or attitude")
+    alignment = exploration.get("alignment")
+    if not isinstance(alignment, dict):
+        raise ValueError("exploration.alignment must be a mapping")
+    if not isinstance(alignment.get("enabled"), bool):
+        raise ValueError("exploration.alignment.enabled must be true or false")
+    for name in ("wall_distance_m", "tolerance_m", "max_shift_m"):
+        value = alignment.get(name)
+        if not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+            raise ValueError(f"exploration.alignment.{name} must be a positive number")
+    if alignment["tolerance_m"] >= alignment["wall_distance_m"]:
+        raise ValueError("exploration.alignment.tolerance_m must be below wall_distance_m")
+    if alignment["max_shift_m"] >= exploration["step_m"] / 2:
+        raise ValueError("exploration.alignment.max_shift_m must be below half a grid step")
     max_nodes = exploration.get("max_nodes")
     if type(max_nodes) is not int or not 1 <= max_nodes <= 10000:
         raise ValueError("exploration.max_nodes must be an integer from 1 to 10000")
@@ -152,8 +167,7 @@ def load_config(path=DEFAULT_CONFIG):
             raise ValueError(f"exploration.sensor.{name} must be a finite number")
     if sensor["offset_from_yaw_axis_m"] < 0:
         raise ValueError("exploration.sensor.offset_from_yaw_axis_m must be nonnegative")
-    for name in ("yaw_speed_deg_s", "angle_tolerance_deg", "move_timeout_s",
-                 "action_timeout_s", "scan_timeout_s"):
+    for name in ("yaw_speed_deg_s", "angle_tolerance_deg"):
         value = gimbal.get(name)
         if not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
             raise ValueError(f"exploration.gimbal.{name} must be a positive number")
