@@ -105,6 +105,8 @@ Dashboard แสดงกริดกำแพงเป็นค่าเริ�
 
 ก่อนเดินไปแต่ละช่อง เดินกลับ หรือขยับจัดกลางช่อง DFS อ่าน yaw chassis ล่าสุดจาก `exploration.heading_source` แล้วส่งค่านั้นเป็นเป้าหมายให้ PID รักษาตลอดช่วงเดิน ค่า yaw ที่ใช้ล่าสุดแสดงบน dashboard และบันทึกใน `run_summary.json.exploration.last_motion_heading`
 
+เมื่อเปิด `exploration.alignment.enabled` DFS เลือกผนังฝั่งเดียวต่อแกนเพื่อจัดตำแหน่งด้วย PID ไม่เฉลี่ยผนังสองฝั่ง ค่าเป้าหมายปัจจุบันอยู่ที่ 25 ซม. จากกึ่งกลางรถ หาก scan ใหม่ที่หันตรงผนังที่เลือกวัดระยะจากกึ่งกลางรถไม่เกิน 20 ซม. ระบบหยุดการขยับ alignment ทันที และถือ pose ที่หยุดเป็นกลางช่องสำหรับรอบนั้น พร้อมบันทึกเหตุ `emergency_stop_centered` ในแผนที่และหน้า review
+
 SDK `gimbal.moveto()` ปกติสั่ง yaw เทียบตัวรถแต่ pitch เทียบจุดอ้างอิงตอนเปิดเครื่อง; DFS ใช้ `GimbalMoveAction` โหมดเทียบตัวรถแทน และตรวจ `yaw_deg` กับ `pitch_deg` หน้า dashboard/review ยังคงแสดง `pitch_ground_deg` แยกเพื่อช่วยเทียบสองกรอบ
 
 ตั้ง `exploration.sensor.tof_channel` เป็นดัชนี 0–3 ของข้อมูล `sub_distance` (ค่าเริ่มต้น 0 คือค่าตัวแรกที่ต่ออยู่จริง), `offset_from_yaw_axis_m: 0.075` คือระยะหัว ToF จากแกนหมุน yaw ตามที่แจ้ง โดยตั้งสมมติฐานว่า offset อยู่ตามแนวเลนส์ (`offset_yaw_deg: 0`); หากไม่ได้อยู่แนวเดียวกันให้ปรับมุมนี้ และใช้ `yaw_offset_deg` สำหรับแนวเลนส์ที่คลาดจากแนวหน้า gimbal ค่า `pivot_x_m/pivot_y_m` วัดจากกึ่งกลางหุ่นไปยังแกน yaw (ค่าเริ่มต้น 0,0 เป็นค่าชั่วคราวจนกว่าจะวัดตำแหน่งแกนบนตัวรถ) ก่อนวิ่งให้ยืนยันทั้งช่องและตำแหน่งแกนจริง ตั้ง `dashboard.enabled: true`, `exploration.enabled: true`, และคง `mission.enabled: false` จากนั้นรัน `python main.py` ในพื้นที่โล่งที่มีทางหยุดรถได้

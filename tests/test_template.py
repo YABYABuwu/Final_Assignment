@@ -51,6 +51,7 @@ class TemplateTests(unittest.TestCase):
         self.assertGreater(config["exploration"]["wall_threshold_mm"], 0)
         self.assertEqual(config["exploration"]["tof_median_window"], 3)
         self.assertIsInstance(config["exploration"]["alignment"]["enabled"], bool)
+        self.assertEqual(config["exploration"]["alignment"]["emergency_stop_distance_m"], .20)
         self.assertNotIn("min_range_m", config["exploration"]["map"])
         self.assertNotIn("max_range_m", config["exploration"]["map"])
 
@@ -330,6 +331,21 @@ class TemplateTests(unittest.TestCase):
 
         self.assertEqual(chassis.move_to(1, 0, disable_timeout=True), (1, 0, 0))
         self.assertGreaterEqual(len(module.commands), 31)
+        self.assertEqual(module.commands[-1], {"x": 0, "y": 0, "z": 0})
+
+    def test_move_to_stop_condition_returns_current_pose_and_stops_wheels(self):
+        module = FakeModule()
+        motion = load_config()["motion"]
+        motion["control_period_s"] = .001
+        chassis = ChassisController(SimpleNamespace(chassis=module), None, motion)
+        poses = iter([(0, 0, 0), (.03, 0, 0)])
+        chassis.get_pose = lambda: next(poses, (.03, 0, 0))
+
+        pose = chassis.move_to(1, 0, yaw=0, timeout_s=.1,
+                               stop_if=lambda current: current[0] >= .03)
+
+        self.assertEqual(pose, (.03, 0, 0))
+        self.assertGreater(module.commands[0]["x"], 0)
         self.assertEqual(module.commands[-1], {"x": 0, "y": 0, "z": 0})
 
 

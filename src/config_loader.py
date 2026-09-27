@@ -115,7 +115,8 @@ def load_config(path=DEFAULT_CONFIG):
         raise ValueError("exploration.alignment must be a mapping")
     if not isinstance(alignment.get("enabled"), bool):
         raise ValueError("exploration.alignment.enabled must be true or false")
-    for name in ("wall_distance_m", "tolerance_m", "max_shift_m"):
+    for name in ("wall_distance_m", "tolerance_m", "max_shift_m",
+                 "emergency_stop_distance_m"):
         value = alignment.get(name)
         if not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
             raise ValueError(f"exploration.alignment.{name} must be a positive number")

@@ -61,12 +61,14 @@ class ChassisController:
         return position[0], position[1], yaw
 
     def move_to(self, x, y, yaw=None, timeout_s=None, abort_event=None,
-                disable_timeout=False):
+                disable_timeout=False, stop_if=None):
         """Drive toward an absolute (x, y) waypoint; optionally face yaw.
 
         x/y use the chassis position frame established at subscription.
         With yaw=None, hold the first move's heading across later waypoints.
-        Returns the final pose. Raises TimeoutError when data or progress stops.
+        stop_if receives each fresh pose before the PID command; returning True
+        ends the move at that pose and the finally block stops the wheels.
+        Raises TimeoutError when data or progress stops.
         """
         timeout = None if disable_timeout else (
             timeout_s if timeout_s is not None else self.settings["timeout_s"]
@@ -89,6 +91,8 @@ class ChassisController:
                 pose = self.get_pose()
                 if pose is None:
                     raise TimeoutError("position, attitude, or configured heading data is missing/stale")
+                if stop_if is not None and stop_if(pose):
+                    return pose
                 current_x, current_y, current_yaw = pose
                 if target_yaw is None and self.settings.get("hold_heading", True):
                     if self.heading_reference is None:

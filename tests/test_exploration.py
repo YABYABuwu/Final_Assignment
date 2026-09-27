@@ -83,7 +83,10 @@ class SimulatedGimbal:
         self.logger.set("gimbal", (self.pitch, self.yaw, self.pitch, self.yaw),
                         self.scan_time)
         pose = tuple(self.slam_map.pose)
-        self.slam_map.update(pose, self._range(pose), timestamp=self.scan_time,
+        reading = self._range(pose)
+        self.logger.set("tof", reading if isinstance(reading, (list, tuple)) else (reading,),
+                        self.scan_time)
+        self.slam_map.update(pose, reading, timestamp=self.scan_time,
                              gimbal_yaw_deg=self.yaw)
 
     def recenter(self, pitch_speed, yaw_speed):
@@ -100,9 +103,12 @@ class SimulatedChassis:
         self.scan_time = time.time()
         self.commands = []
 
-    def move_to(self, x, y, yaw=None, abort_event=None, disable_timeout=False):
+    def move_to(self, x, y, yaw=None, abort_event=None, disable_timeout=False,
+                stop_if=None):
         if abort_event is not None and abort_event.is_set():
             raise RuntimeError("simulated motion aborted")
+        if stop_if is not None and stop_if(tuple(self.slam_map.pose)):
+            return tuple(self.slam_map.pose)
         pose = (x, y, yaw or 0.0)
         self.commands.append(pose)
         self.scan_time = max(time.time(), self.scan_time,
@@ -110,6 +116,8 @@ class SimulatedChassis:
         self.logger.set("attitude", (pose[2], 0, 0), self.scan_time)
         readings = (self.ranges(pose, self.gimbal.yaw)
                     if callable(self.ranges) else self.ranges)
+        self.logger.set("tof", readings if isinstance(readings, (list, tuple)) else (readings,),
+                        self.scan_time)
         self.slam_map.update(pose, readings, timestamp=self.scan_time,
                              gimbal_yaw_deg=self.gimbal.yaw)
         return pose
@@ -123,7 +131,8 @@ class ExplorationTests(unittest.TestCase):
         self.settings["wall_threshold_mm"] = 300
         self.settings["tof_median_window"] = 1
         self.settings["alignment"].update({"enabled": True, "wall_distance_m": .25,
-                                           "tolerance_m": .03, "max_shift_m": .20})
+                                           "tolerance_m": .03, "max_shift_m": .20,
+                                           "emergency_stop_distance_m": .10})
         self.ranges = [2000, 2000, 2000, 2000]
 
     def make_map(self):
@@ -418,7 +427,7 @@ class ExplorationTests(unittest.TestCase):
             "source": "gimbal"})
 
     def test_dfs_does_not_move_when_all_sensor_ranges_are_blocked(self):
-        blocked_ranges = [300, 300, 300, 300]
+        blocked_ranges = [200, 200, 200, 200]
         slam_map = OccupancyGridSLAM(self.settings)
         slam_map.update((0, 0, 0), blocked_ranges)
         logger = FakeLogger()
@@ -464,19 +473,22 @@ class ExplorationTests(unittest.TestCase):
         explorer._move((0, 0))
         self.assertAlmostEqual(chassis.commands[-1][0], -.05)
 
-    def test_alignment_rejects_opposing_walls_too_close_for_target_distance(self):
+    def test_alignment_emergency_accepts_current_pose_as_cell_center(self):
+        settings = copy.deepcopy(self.settings)
+        settings["alignment"]["emergency_stop_distance_m"] = .20
         slam_map = self.make_map()
         logger = FakeLogger()
         logger.set("attitude", (0, 0, 0))
         gimbal = SimulatedGimbal(slam_map, logger, 100)
         chassis = SimulatedChassis(slam_map, logger, gimbal, 100)
-        explorer = DFSExplorer(chassis, gimbal, logger, slam_map, self.settings)
+        explorer = DFSExplorer(chassis, gimbal, logger, slam_map, settings)
         explorer.base_pose = (0, 0, 0)
         for delta in ((1, 0), (-1, 0)):
             explorer.wall_grid.observe((0, 0), delta, .175, 100, 300, time.time())
 
-        with self.assertRaisesRegex(RuntimeError, "cannot stay"):
-            explorer._align_cell((0, 0))
+        explorer._align_cell((0, 0))
+        self.assertEqual(explorer.alignments[(0, 0)]["status"], "emergency_stop_centered")
+        self.assertEqual(explorer.cell_targets[(0, 0)], (0, 0))
         self.assertEqual(chassis.commands, [])
 
     def test_disabled_alignment_keeps_wall_scan_and_skips_alignment(self):
@@ -500,13 +512,13 @@ class ExplorationTests(unittest.TestCase):
         self.assertEqual(result["alignments"], {})
         self.assertEqual(chassis.commands, [])
 
-    def test_alignment_centers_between_two_walls(self):
+    def test_alignment_selects_one_of_two_opposing_walls(self):
         slam_map = self.make_map()
         logger = FakeLogger()
         logger.set("attitude", (0, 0, 0))
         def wall_range(pose, yaw):
             if abs(((yaw + 180) % 360) - 180) < 90:
-                return round((.25 - pose[0] - .075) * 1000)
+                return round((.30 - pose[0] - .075) * 1000)
             return round((pose[0] + .35 - .075) * 1000)
         gimbal = SimulatedGimbal(slam_map, logger, wall_range)
         chassis = SimulatedChassis(slam_map, logger, gimbal, wall_range)
@@ -514,15 +526,49 @@ class ExplorationTests(unittest.TestCase):
         explorer.base_pose = (0, 0, 0)
         explorer.slam_worker = FakeSlamWorker()
         explorer.cell_targets[(0, 0)] = (0, 0)
-        explorer.wall_grid.observe((0, 0), (1, 0), .25, 175, 300, time.time())
+        explorer.wall_grid.observe((0, 0), (1, 0), .30, 225, 300, time.time())
         explorer.wall_grid.observe((0, 0), (-1, 0), .35, 275, 300, time.time())
 
         explorer._align_cell((0, 0))
 
-        self.assertAlmostEqual(chassis.commands[0][0], -.05)
+        self.assertAlmostEqual(chassis.commands[0][0], .05)
         self.assertAlmostEqual(chassis.commands[0][1], 0)
         self.assertEqual(explorer.alignments[(0, 0)]["walls"],
-                         {"x+": .25, "x-": .35})
+                         {"x+": .30, "x-": .35})
+        self.assertEqual(explorer.alignments[(0, 0)]["selected_sides"], ["x+"])
+
+    def test_alignment_stops_on_new_close_tof_and_records_actual_pose(self):
+        class EmergencyChassis(SimulatedChassis):
+            def move_to(self, x, y, yaw=None, stop_if=None, **kwargs):
+                self.commands.append((x, y, yaw))
+                self.slam_map.update((.03, 0, 0), 110,
+                                     timestamp=time.time() + .01,
+                                     gimbal_yaw_deg=self.gimbal.yaw)
+                self.logger.set("tof", (110,), self.slam_map.latest_scan_timestamp)
+                pose = tuple(self.slam_map.pose)
+                if stop_if is None or not stop_if(pose):
+                    raise AssertionError("alignment did not stop on the close wall")
+                return pose
+
+        settings = copy.deepcopy(self.settings)
+        settings["alignment"]["emergency_stop_distance_m"] = .20
+        slam_map = self.make_map()
+        logger = FakeLogger()
+        logger.set("attitude", (0, 0, 0))
+        gimbal = SimulatedGimbal(slam_map, logger, 300)
+        chassis = EmergencyChassis(slam_map, logger, gimbal, 300)
+        explorer = DFSExplorer(chassis, gimbal, logger, slam_map, settings)
+        explorer.base_pose = (0, 0, 0)
+        explorer.slam_worker = FakeSlamWorker()
+        explorer.wall_grid.observe((0, 0), (1, 0), .375, 300, 500, time.time())
+
+        explorer._align_cell((0, 0))
+
+        result = explorer.alignments[(0, 0)]
+        self.assertEqual(result["status"], "emergency_stop_centered")
+        self.assertEqual(result["emergency_range_mm"], 110)
+        self.assertAlmostEqual(result["emergency_center_distance_m"], .185)
+        self.assertAlmostEqual(explorer.cell_targets[(0, 0)][0], .03, places=2)
 
     def test_gimbal_chooses_nearest_relative_yaw_at_half_turn(self):
         slam_map = OccupancyGridSLAM(self.settings)

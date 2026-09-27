@@ -286,9 +286,12 @@
         if (alignment) {
           const distances=Object.entries(alignment.after_m || alignment.walls || {})
             .map(([side,distance]) => `${side} ${(distance*100).toFixed(1)} ซม.`).join(", ");
+          const alignmentStatus=alignment.status === "emergency_stop_centered"
+            ? `หยุดฉุกเฉินที่ ${(alignment.emergency_center_distance_m*100).toFixed(1)} ซม.; ถือเป็นกลางช่อง`
+            : alignment.status === "moved" ? "ขยับแล้ว" : alignment.status === "no_wall" ? "ไม่พบกำแพง" : "อยู่ในเกณฑ์";
           document.getElementById("cell-sides").textContent +=
-            ` · จัดกลางช่อง: ${alignment.status === "moved" ? "ขยับแล้ว" : alignment.status === "no_wall" ? "ไม่พบกำแพง" : "อยู่ในเกณฑ์"}`+
-            (distances ? ` (${distances}; เป้าหมาย ${(alignment.target_distance_m*100).toFixed(0)} ซม.)` : "");
+            ` · จัดกลางช่อง: ${alignmentStatus}`+
+            (distances ? ` (${distances}; ใช้ ${alignment.selected_sides?.join(", ") || "—"}; เป้าหมาย ${(alignment.target_distance_m*100).toFixed(0)} ซม.)` : "");
         } else if (map.exploration?.alignment_enabled === false)
           document.getElementById("cell-sides").textContent += " · จัดกลางช่อง: ปิด";
       } else document.getElementById("cell-sides").textContent="ยังไม่มีกริดกำแพงจากการสแกนครบด้าน";

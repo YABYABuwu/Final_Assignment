@@ -99,16 +99,18 @@ class DFSExplorer:
             raise TimeoutError("attitude yaw is invalid during exploration")
         return yaw
 
-    def _drive_holding_current_yaw(self, x, y, kind):
+    def _drive_holding_current_yaw(self, x, y, kind, stop_if=None):
         """Capture the live chassis heading immediately before this motion."""
         yaw = self._current_yaw()
         with self.lock:
             self.last_motion_heading = {"yaw_deg": yaw, "target_m": [x, y],
                                         "kind": kind, "source": self.settings["heading_source"]}
         self.map.set_exploration_state(self.snapshot())
-        return self.chassis.move_to(x, y, yaw=yaw,
-                                    abort_event=self.slam_worker.abort_event,
-                                    disable_timeout=True)
+        options = {"yaw": yaw, "abort_event": self.slam_worker.abort_event,
+                   "disable_timeout": True}
+        if stop_if is not None:
+            options["stop_if"] = stop_if
+        return self.chassis.move_to(x, y, **options)
 
     def _motion_pose(self):
         """Read the chassis frame used by move_to, rather than scan-matched pose."""
@@ -274,10 +276,11 @@ class DFSExplorer:
         return allowed
 
     def _align_cell(self, node):
-        """Use the four settled scans from a new cell to center between walls."""
+        """Align from one wall per axis, stopping on a close ToF reading."""
         desired = self.settings["alignment"]["wall_distance_m"]
         tolerance = self.settings["alignment"]["tolerance_m"]
         max_shift = self.settings["alignment"]["max_shift_m"]
+        emergency_distance = self.settings["alignment"]["emergency_stop_distance_m"]
         walls = {}
         for delta in self.DIRECTIONS:
             check = self.wall_grid.checks.get((node, delta))
@@ -289,22 +292,31 @@ class DFSExplorer:
                 raise RuntimeError(f"invalid wall distance for alignment at {node}")
             walls[delta] = distance
 
-        corrections = []
+        selected = []
         for positive, negative in (((1, 0), (-1, 0)), ((0, 1), (0, -1))):
-            plus, minus = walls.get(positive), walls.get(negative)
-            if plus is not None and minus is not None:
-                width = plus + minus
-                if width < 2 * desired:
-                    raise RuntimeError(
-                        f"walls at {node} are only {width:.3f} m apart; "
-                        f"cannot stay {desired:.3f} m from both")
-                correction = (plus - minus) / 2.0
-            elif plus is not None:
-                correction = plus - desired
-            elif minus is not None:
-                correction = desired - minus
+            if positive in walls:
+                selected.append(positive)
+            elif negative in walls:
+                selected.append(negative)
             else:
+                selected.append(None)
+
+        fresh_readings = {}
+        for delta in selected:
+            if delta is None:
+                continue
+            reading, yaw = self._scan_for_direction(delta)
+            walls[delta] = reading / 1000.0 + self._sensor_offset(yaw)
+            fresh_readings[delta] = reading
+
+        corrections = []
+        for delta in selected:
+            if delta is None:
                 correction = 0.0
+            elif delta[0] > 0 or delta[1] > 0:
+                correction = walls[delta] - desired
+            else:
+                correction = desired - walls[delta]
             corrections.append(correction)
 
         shift = math.hypot(*corrections)
@@ -312,7 +324,22 @@ class DFSExplorer:
                             zip(CellWallGrid.SIDE_NAMES, self.DIRECTIONS)
                             if delta in walls},
                   "target_distance_m": desired, "correction_m":
-                  [round(value, 4) for value in corrections]}
+                  [round(value, 4) for value in corrections],
+                  "selected_sides": [CellWallGrid.SIDE_NAMES[self.DIRECTIONS.index(delta)]
+                                     for delta in selected if delta is not None],
+                  "emergency_stop_distance_m": emergency_distance}
+        for delta in selected:
+            if delta is None:
+                continue
+            if walls[delta] <= emergency_distance:
+                result["status"] = "emergency_stop_centered"
+                result["emergency_range_mm"] = fresh_readings[delta]
+                result["emergency_center_distance_m"] = round(walls[delta], 4)
+                with self.lock:
+                    self.cell_targets[node] = tuple(self._motion_pose()[:2])
+                    self.alignments[node] = result
+                self.map.set_exploration_state(self.snapshot())
+                return
         if shift > max_shift:
             raise RuntimeError(f"alignment at {node} needs {shift:.3f} m, "
                                f"above configured limit {max_shift:.3f} m")
@@ -325,35 +352,71 @@ class DFSExplorer:
 
         x, y = self._motion_pose()[:2]
         angle = math.radians(self.base_pose[2])
-        dx, dy = corrections
-        target = (x + dx * math.cos(angle) - dy * math.sin(angle),
-                  y + dx * math.sin(angle) + dy * math.cos(angle))
-        if not self.map.contains_world(*target):
-            raise RuntimeError(f"alignment target for {node} is outside the SLAM map")
         self._set_status("aligning")
-        previous_scan = self.map.latest_scan_timestamp or 0.0
-        self._drive_holding_current_yaw(*target, kind="alignment")
-        while (self.map.latest_scan_timestamp or 0.0) <= previous_scan:
-            worker_status = self.slam_worker.status()
-            if worker_status["error"]:
-                raise RuntimeError(worker_status["error"])
-            time.sleep(0.05)
         verified = {}
-        for delta in self.DIRECTIONS:
-            if delta not in walls:
+        stopped = False
+        for axis, delta in enumerate(selected):
+            correction = corrections[axis]
+            if delta is None or abs(correction) <= tolerance:
                 continue
+            reading, yaw = self._scan_for_direction(delta)
+            center_distance = reading / 1000.0 + self._sensor_offset(yaw)
+            if center_distance <= emergency_distance:
+                result["emergency_range_mm"] = reading
+                result["emergency_center_distance_m"] = round(center_distance, 4)
+                stopped = True
+                break
+            step_x = correction * (math.cos(angle) if axis == 0 else -math.sin(angle))
+            step_y = correction * (math.sin(angle) if axis == 0 else math.cos(angle))
+            target = (x + step_x, y + step_y)
+            if not self.map.contains_world(*target):
+                raise RuntimeError(f"alignment target for {node} is outside the SLAM map")
+            target_yaw = _wrap_degrees(yaw - self._current_yaw() -
+                                       float(self.settings["sensor"]["yaw_offset_deg"]))
+
+            def stop_if(_pose):
+                worker_status = self.slam_worker.status()
+                if worker_status["error"]:
+                    raise RuntimeError(worker_status["error"])
+                tof = self.logger.get_sample("tof", max_age_s=self.settings["max_sample_age_s"])
+                if tof is None:
+                    raise RuntimeError("alignment ToF data is missing or stale")
+                scan_yaw, scan_pitch, angle_timestamp = self._gimbal_sample()
+                if abs(tof[1] - angle_timestamp) > self.settings["sample_skew_s"]:
+                    raise RuntimeError("alignment ToF and gimbal timestamps are not synchronized")
+                if (abs(_wrap_degrees(target_yaw - scan_yaw)) >
+                        self.settings["gimbal"]["angle_tolerance_deg"] or
+                        abs(self.settings["gimbal"]["pitch_deg"] - scan_pitch) >
+                        self.settings["gimbal"]["angle_tolerance_deg"]):
+                    raise RuntimeError("alignment ToF no longer points at selected wall")
+                scan_distance = self.map._range_value(tof[0])
+                if scan_distance is None:
+                    raise RuntimeError("alignment ToF reading is invalid")
+                center_distance = scan_distance + self._sensor_offset(yaw)
+                if center_distance <= emergency_distance:
+                    result["emergency_range_mm"] = scan_distance * 1000.0
+                    result["emergency_center_distance_m"] = round(center_distance, 4)
+                    return True
+                return False
+
+            pose = self._drive_holding_current_yaw(*target, kind="alignment",
+                                                   stop_if=stop_if)
+            x, y = pose[:2]
+            if "emergency_range_mm" in result:
+                stopped = True
+                break
             reading, yaw = self._scan_for_direction(delta)
             actual = reading / 1000.0 + self._sensor_offset(yaw)
             name = CellWallGrid.SIDE_NAMES[self.DIRECTIONS.index(delta)]
             verified[name] = round(actual, 4)
-            expected = walls[delta] - dx * delta[0] - dy * delta[1]
+            expected = walls[delta] - correction * delta[axis]
             if actual < desired - tolerance or abs(actual - expected) > 2 * tolerance:
                 raise RuntimeError(
                     f"alignment at {node} did not reach a safe wall distance: "
                     f"{name} {actual:.3f} m, expected {expected:.3f} m")
         with self.lock:
-            self.cell_targets[node] = target
-            result["status"] = "moved"
+            self.cell_targets[node] = (x, y)
+            result["status"] = "emergency_stop_centered" if stopped else "moved"
             result["after_m"] = verified
             self.alignments[node] = result
         self.map.set_exploration_state(self.snapshot())

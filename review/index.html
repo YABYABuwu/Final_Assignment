@@ -393,7 +393,10 @@
           note.textContent="จัดกลางช่องจากระยะกึ่งกลางรถถึงกำแพง: "+Object.entries(alignments).map(([cell,result])=>{
             const distances=Object.entries(result.after_m || result.walls || {})
               .map(([side,distance])=>`${side} ${(distance*100).toFixed(1)} ซม.`).join(", ");
-            return `${cell} ${result.status === "moved" ? "ขยับแล้ว" : result.status === "no_wall" ? "ไม่พบกำแพง" : "อยู่ในเกณฑ์"}${distances ? ` (${distances})` : ""}`;
+            const status=result.status === "emergency_stop_centered"
+              ? `หยุดฉุกเฉินที่ ${(result.emergency_center_distance_m*100).toFixed(1)} ซม. และถือเป็นกลางช่อง`
+              : result.status === "moved" ? "ขยับแล้ว" : result.status === "no_wall" ? "ไม่พบกำแพง" : "อยู่ในเกณฑ์";
+            return `${cell} ${status}${distances ? ` (${distances}; ใช้ ${result.selected_sides?.join(", ") || "—"})` : ""}`;
           }).join(" · ");
           wallPanel.append(note);
         }
