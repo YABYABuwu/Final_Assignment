@@ -610,6 +610,26 @@ class ExplorationTests(unittest.TestCase):
         self.assertEqual(gimbal.recenter_calls, 0)
         self.assertAlmostEqual(gimbal.commands[-1][0], 5)
 
+    def test_scan_checks_pitch_in_moveto_reference_frame(self):
+        class GroundLevelGimbal(SimulatedGimbal):
+            def moveto(self, pitch, yaw, pitch_speed, yaw_speed):
+                super().moveto(pitch, yaw, pitch_speed, yaw_speed)
+                # A tilted chassis changes pitch relative to the chassis,
+                # while the commanded startup-reference pitch stays at zero.
+                self.logger.set("gimbal", (-5, self.yaw, 0, self.yaw),
+                                self.scan_time + .001)
+
+        slam_map = OccupancyGridSLAM(self.settings)
+        slam_map.update((0, 0, 0), 2000)
+        logger = FakeLogger()
+        logger.set("attitude", (0, 0, 0))
+        gimbal = GroundLevelGimbal(slam_map, logger, 2000)
+        explorer = DFSExplorer(None, gimbal, logger, slam_map, self.settings)
+        explorer.base_pose = (0, 0, 0)
+        explorer.slam_worker = FakeSlamWorker()
+
+        self.assertEqual(explorer._scan_for_direction((1, 0))[0], 2000)
+
     def test_gimbal_scan_waits_for_sdk_action_before_next_command(self):
         class PendingAction:
             def __init__(self):

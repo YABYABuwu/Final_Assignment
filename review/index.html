@@ -229,7 +229,7 @@
         ["Yaw รถ", attitude ? `${format(attitude[0])}°` : "—"],
         ["ความเร็วประมาณ", `${format(speedAt(currentTime))} m/s`],
         ["ToF #0", tof ? `${format(tof[0], 0)} mm` : "—"],
-        ["Yaw / Pitch gimbal", gimbal ? `${format(gimbal[1])}° / ${format(gimbal[0])}°` : "—"],
+        ["Gimbal yaw เทียบรถ / pitch เทียบรถ / pitch อ้างอิง", gimbal ? `${format(gimbal[1])}° / ${format(gimbal[0])}° / ${format(gimbal[2])}°` : "—"],
         ["Battery", battery ? `${format(battery[0], 0)}%` : "—"],
       ];
       for (const [label, value] of items) {

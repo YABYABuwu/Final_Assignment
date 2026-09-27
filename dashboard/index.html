@@ -323,7 +323,7 @@
           ctx.beginPath(); ctx.moveTo(sensorX, sensorY);
           ctx.lineTo(sensorX + Math.sin(direction) * 20, sensorY - Math.cos(direction) * 20);
           ctx.strokeStyle = "#8df3d3"; ctx.lineWidth = 3; ctx.stroke();
-          document.getElementById("gimbal-map").textContent = `yaw ${number(gimbal[1])}° · pitch ${number(gimbal[0])}°`;
+          document.getElementById("gimbal-map").textContent = `yaw เทียบรถ ${number(gimbal[1])}° · pitch เทียบรถ ${number(gimbal[0])}° · pitch อ้างอิง ${number(gimbal[2])}°`;
         } else document.getElementById("gimbal-map").textContent = "—";
       }
       const points = history.position || [];
@@ -488,7 +488,7 @@
         const tofChannel = Number(slamMap?.sensor_model?.tof_channel ?? 0);
         const tofValue = status.streams.tof?.[tofChannel];
         document.getElementById("tof").textContent = tofValue > 0 ? `${number(tofValue, 0)} mm` : "— mm";
-        document.getElementById("gimbal-angle").textContent = status.streams.gimbal ? `yaw ${number(status.streams.gimbal[1])}° · pitch ${number(status.streams.gimbal[0])}°` : "—";
+        document.getElementById("gimbal-angle").textContent = status.streams.gimbal ? `yaw เทียบรถ ${number(status.streams.gimbal[1])}° · pitch เทียบรถ ${number(status.streams.gimbal[0])}° · pitch อ้างอิง ${number(status.streams.gimbal[2])}°` : "—";
         document.getElementById("camera-note").textContent = status.camera_error || (status.camera_ready ? "ภาพกำลังอัปเดต" : "รอภาพจากกล้อง…");
         document.getElementById("graph-summary").textContent = `ชี้กราฟเพื่ออ่านค่า · CSV ข้าม ${status.dropped_csv_rows} แถว`;
         document.getElementById("dfs-status").textContent = status.exploration?.status || (status.slam ? (status.slam.ready ? "SLAM ready" : "SLAM waiting") : "ปิด");

@@ -128,9 +128,17 @@ class DFSExplorer:
 
     def _gimbal_sample(self):
         sample = self.logger.get_sample("gimbal", max_age_s=self.settings["max_sample_age_s"])
-        if sample is None or len(sample[0]) < 3:
+        if sample is None or len(sample[0]) < 4:
             raise TimeoutError("gimbal angle data is missing or stale during exploration")
-        return float(sample[0][1]), float(sample[0][2]), float(sample[1])
+        try:
+            yaw, ground_pitch = float(sample[0][1]), float(sample[0][2])
+        except (TypeError, ValueError) as error:
+            raise TimeoutError("gimbal angle data is invalid during exploration") from error
+        if not math.isfinite(yaw) or not math.isfinite(ground_pitch):
+            raise TimeoutError("gimbal angle data is invalid during exploration")
+        # moveto() uses yaw relative to the chassis and pitch relative to the
+        # startup reference (COORDINATE_YCPN). Check telemetry in those frames.
+        return yaw, ground_pitch, float(sample[1])
 
     @staticmethod
     def _command_yaw(target_relative_yaw, current_relative_yaw):
