@@ -357,6 +357,11 @@
       const wallPanel=document.getElementById("wall-grid-review"); wallPanel.replaceChildren();
       const wallGrid=run.summary.exploration?.cell_grid;
       if (wallGrid?.cells?.length) {
+        if (run.summary.exploration?.tof_median_window != null) {
+          const note=document.createElement("p");
+          note.textContent=`ระยะที่ใช้ตัดสินใจ DFS: median จาก ${run.summary.exploration.tof_median_window} scan หลัง gimbal หันตรงทิศ (CSV เป็น ToF ดิบ)`;
+          wallPanel.append(note);
+        }
         const scanned=run.summary.exploration?.scanned_cells;
         if (run.summary.exploration?.heading_source === "gimbal") {
           const note=document.createElement("p");

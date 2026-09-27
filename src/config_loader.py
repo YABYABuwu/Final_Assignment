@@ -103,6 +103,9 @@ def load_config(path=DEFAULT_CONFIG):
         raise ValueError("exploration.sample_skew_s cannot exceed max_sample_age_s")
     if exploration["update_hz"] > 50:
         raise ValueError("exploration.update_hz cannot exceed 50 Hz")
+    median_window = exploration.get("tof_median_window")
+    if type(median_window) is not int or median_window < 1 or median_window > 9 or median_window % 2 != 1:
+        raise ValueError("exploration.tof_median_window must be an odd integer from 1 to 9")
     if exploration["max_speed_m_s"] > motion["max_speed_m_s"]:
         raise ValueError("exploration.max_speed_m_s cannot exceed motion.max_speed_m_s")
     if exploration.get("heading_source") not in ("gimbal", "attitude"):

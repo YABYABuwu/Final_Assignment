@@ -120,6 +120,7 @@ class ExplorationTests(unittest.TestCase):
         self.settings = copy.deepcopy(self.config["exploration"])
         # Keep the simulated geometry stable when the hardware settings change.
         self.settings["wall_threshold_mm"] = 300
+        self.settings["tof_median_window"] = 1
         self.settings["alignment"].update({"enabled": True, "wall_distance_m": .25,
                                            "tolerance_m": .03, "max_shift_m": .20})
         self.ranges = [2000, 2000, 2000, 2000]
@@ -507,6 +508,37 @@ class ExplorationTests(unittest.TestCase):
         self.assertAlmostEqual(gimbal.commands[-1][1], 180)
         self.assertAlmostEqual(explorer._command_yaw(-30, 0), -30)
         self.assertAlmostEqual(explorer._command_yaw(0, -180), 0)
+
+    def test_scan_median_uses_three_new_scans_in_target_direction(self):
+        settings = copy.deepcopy(self.settings)
+        settings["tof_median_window"] = 3
+        slam_map = OccupancyGridSLAM(settings)
+        slam_map.update((0, 0, 0), 2000)
+        logger = FakeLogger()
+        logger.set("attitude", (0, 0, 0))
+        gimbal = SimulatedGimbal(slam_map, logger, 200)
+        explorer = DFSExplorer(None, gimbal, logger, slam_map, settings)
+        explorer.base_pose = (0, 0, 0)
+        explorer.slam_worker = FakeSlamWorker()
+
+        def later_scans():
+            for yaw, distance in ((90, 100), (0, 2000), (0, 2100)):
+                time.sleep(.08)
+                slam_map.update((0, 0, 0), distance,
+                                timestamp=time.time(), gimbal_yaw_deg=yaw)
+
+        producer = threading.Thread(target=later_scans)
+        producer.start()
+        try:
+            measured_mm, _ = explorer._scan_for_direction((1, 0))
+        finally:
+            producer.join(timeout=2)
+        self.assertEqual(measured_mm, 2000)
+        self.assertFalse(producer.is_alive())
+
+    def test_tof_65535_is_not_a_valid_scan(self):
+        slam_map = OccupancyGridSLAM(self.settings)
+        self.assertFalse(slam_map.scan_is_valid(65535, 0))
 
     def test_gimbal_front_scan_ignores_startup_frame_yaw(self):
         slam_map = OccupancyGridSLAM(self.settings)

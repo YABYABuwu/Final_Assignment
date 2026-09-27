@@ -275,7 +275,7 @@
         }
         const current=grid.cells.find(c => c.index[0]===grid.current?.[0] && c.index[1]===grid.current?.[1]);
         const labels={"x+":"หน้า +X", "y-":"ซ้าย −Y", "x-":"หลัง −X", "y+":"ขวา +Y"};
-        document.getElementById("cell-sides").textContent = `ช่อง ${grid.current?.join(",")} · ${grid.cell_size_m.toFixed(2)} ม. · ` + Object.entries(labels).map(([key,label]) => {
+        document.getElementById("cell-sides").textContent = `ช่อง ${grid.current?.join(",")} · ${grid.cell_size_m.toFixed(2)} ม. · ค่ากลาง ToF ${map.exploration?.tof_median_window ?? 1} ครั้ง · ` + Object.entries(labels).map(([key,label]) => {
           const side=current?.sides[key]; const state=side?.state;
           const reading = side?.wall_threshold_mm != null && side?.range_mm != null ? ` (${side.range_mm.toFixed(0)} มม.; เกณฑ์ ${side.wall_threshold_mm.toFixed(0)} มม.)` : "";
           const source = side?.source === "inferred" ? " · อนุมานจากช่องไกล" :

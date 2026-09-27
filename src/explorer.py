@@ -1,6 +1,7 @@
 """Depth-first frontier traversal over a SLAM occupancy grid."""
 
 import math
+import statistics
 import threading
 import time
 
@@ -53,6 +54,7 @@ class DFSExplorer:
                 "moves": self.moves,
                 "heading_source": self.settings["heading_source"],
                 "alignment_enabled": self.settings["alignment"]["enabled"],
+                "tof_median_window": self.settings["tof_median_window"],
                 "cell_targets": {f"{node[0]},{node[1]}": list(point)
                                  for node, point in sorted(self.cell_targets.items())},
                 "alignments": {f"{node[0]},{node[1]}": result
@@ -154,6 +156,10 @@ class DFSExplorer:
         measured_yaw = current_yaw
         waiting_for_action = False
         action_confirmed = action is None
+        median_window = self.settings["tof_median_window"]
+        samples = []
+        last_sample_timestamp = request_time
+        collection_after = request_time if action_confirmed else None
         while True:
             worker_status = self.slam_worker.status() if self.slam_worker is not None else None
             if worker_status is not None and worker_status["error"]:
@@ -175,12 +181,17 @@ class DFSExplorer:
                 if callable(wait_for_completed) and not wait_for_completed():
                     raise RuntimeError("gimbal SDK reported success but did not release its action")
                 action_confirmed = True
+                if median_window > 1:
+                    collection_after = time.time()
+                else:
+                    collection_after = request_time
 
             scan_timestamp = self.map.latest_scan_timestamp
             scan_yaw = self.map.latest_gimbal_yaw_deg
             scan_range = self.map.latest_range_mm
             scan_ready = (aligned and scan_timestamp is not None and
                     scan_timestamp > request_time and
+                    scan_timestamp > last_sample_timestamp and
                     scan_yaw is not None and
                     abs(_wrap_degrees(target_yaw - scan_yaw)) <= tolerance and
                     scan_range is not None and
@@ -191,9 +202,16 @@ class DFSExplorer:
             elif action_confirmed and waiting_for_action:
                 self._set_status(previous_status)
                 waiting_for_action = False
-            if action_confirmed and scan_ready and not (worker_status or {}).get("tof_waiting", False):
-                self._set_status(previous_status)
-                return float(scan_range), world_yaw
+            if (action_confirmed and scan_ready and
+                    scan_timestamp > collection_after and
+                    not (worker_status or {}).get("tof_waiting", False)):
+                if samples and time.time() - samples[0][0] > self.settings["max_sample_age_s"] * 2:
+                    samples.clear()
+                samples.append((scan_timestamp, float(scan_range)))
+                last_sample_timestamp = scan_timestamp
+                if len(samples) >= median_window:
+                    self._set_status(previous_status)
+                    return float(statistics.median(value for _, value in samples)), world_yaw
             time.sleep(0.03)
 
     def _can_step(self, node, destination):

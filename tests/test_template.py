@@ -49,6 +49,7 @@ class TemplateTests(unittest.TestCase):
         self.assertTrue(config["dashboard"]["enabled"])
         self.assertEqual(config["exploration"]["sensor"]["tof_channel"], 0)
         self.assertGreater(config["exploration"]["wall_threshold_mm"], 0)
+        self.assertEqual(config["exploration"]["tof_median_window"], 3)
         self.assertIsInstance(config["exploration"]["alignment"]["enabled"], bool)
         self.assertNotIn("min_range_m", config["exploration"]["map"])
         self.assertNotIn("max_range_m", config["exploration"]["map"])

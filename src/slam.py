@@ -245,7 +245,7 @@ class OccupancyGridSLAM:
             measured = float(reading_mm) / 1000.0
         except (TypeError, ValueError):
             return None
-        if not math.isfinite(measured) or measured <= 0:
+        if not math.isfinite(measured) or measured <= 0 or measured == 65.535:
             return None
         return measured
 
