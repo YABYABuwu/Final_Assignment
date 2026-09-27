@@ -54,6 +54,7 @@ class DFSExplorer:
                 if self.base_pose is not None else [],
                 "moves": self.moves,
                 "heading_source": self.settings["heading_source"],
+                "gimbal_pitch_frame": "chassis",
                 "alignment_enabled": self.settings["alignment"]["enabled"],
                 "last_motion_heading": self.last_motion_heading,
                 "tof_median_window": self.settings["tof_median_window"],
@@ -131,14 +132,13 @@ class DFSExplorer:
         if sample is None or len(sample[0]) < 4:
             raise TimeoutError("gimbal angle data is missing or stale during exploration")
         try:
-            yaw, ground_pitch = float(sample[0][1]), float(sample[0][2])
+            yaw, chassis_pitch = float(sample[0][1]), float(sample[0][0])
         except (TypeError, ValueError) as error:
             raise TimeoutError("gimbal angle data is invalid during exploration") from error
-        if not math.isfinite(yaw) or not math.isfinite(ground_pitch):
+        if not math.isfinite(yaw) or not math.isfinite(chassis_pitch):
             raise TimeoutError("gimbal angle data is invalid during exploration")
-        # moveto() uses yaw relative to the chassis and pitch relative to the
-        # startup reference (COORDINATE_YCPN). Check telemetry in those frames.
-        return yaw, ground_pitch, float(sample[1])
+        # The DFS action uses COORDINATE_CAR for both axes.
+        return yaw, chassis_pitch, float(sample[1])
 
     @staticmethod
     def _command_yaw(target_relative_yaw, current_relative_yaw):
@@ -165,9 +165,8 @@ class DFSExplorer:
         command_yaw = self._command_yaw(target_yaw, current_yaw)
         request_time = time.time()
         tolerance = self.settings["gimbal"]["angle_tolerance_deg"]
-        # recenter() also controls chassis-relative pitch. On the actual robot its
-        # yaw and ToF settled while the SDK kept that action running. An absolute
-        # moveto(yaw=0) centers yaw without invoking the recenter action.
+        # Center yaw without recenter(), which uses a separate SDK action and
+        # previously remained active after angle telemetry had settled.
         if abs(target_yaw) <= tolerance:
             command_yaw = 0.0
         previous_status = self.status

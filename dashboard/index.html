@@ -355,6 +355,7 @@
       }
       const heldHeading = map.exploration?.last_motion_heading;
       if (heldHeading?.yaw_deg != null) poseText += ` · Yaw เป้าหมายเดินล่าสุด ${number(heldHeading.yaw_deg)}° (${heldHeading.source === "gimbal" ? "gimbal" : "attitude"})`;
+      if (map.exploration?.gimbal_pitch_frame === "chassis") poseText += " · หัวสแกน pitch เทียบรถ";
       document.getElementById("pose").textContent = poseText;
     }
 

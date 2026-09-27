@@ -7,6 +7,7 @@ from src.chassis import ChassisController
 from src.config_loader import load_config
 from src.dashboard import Dashboard
 from src.explorer import DFSExplorer
+from src.gimbal_control import ChassisRelativeGimbal
 from src.logger import SensorLogger
 from src.slam import OccupancyGridSLAM, SlamWorker
 
@@ -63,7 +64,7 @@ def main():
         chassis = ChassisController(ep_robot, logger, motion_settings)
         if exploration_settings["enabled"]:
             slam_worker = SlamWorker(logger, slam_map, exploration_settings)
-            explorer = DFSExplorer(chassis, ep_robot.gimbal, logger, slam_map,
+            explorer = DFSExplorer(chassis, ChassisRelativeGimbal(ep_robot.gimbal), logger, slam_map,
                                     exploration_settings)
             slam_worker.start()
         print("Connected. Logs:", logger.run_dir or "disabled")

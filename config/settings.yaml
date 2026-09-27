@@ -86,7 +86,7 @@ exploration:
     pivot_y_m: 0.0
     yaw_offset_deg: 0.0    # มุมคลาดระหว่างแนวเลนส์กับแนวหน้า gimbal
   gimbal:
-    pitch_deg: 0.0
+    pitch_deg: 0.0          # มุมหัวเทียบตัวรถ; ไม่ชดเชย pitch ของ chassis
     yaw_speed_deg_s: 60
     angle_tolerance_deg: 3
   map:

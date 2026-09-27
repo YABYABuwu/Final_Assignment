@@ -17,6 +17,7 @@ from types import SimpleNamespace
 from src.config_loader import load_config
 from src.dashboard import Dashboard
 from src.explorer import DFSExplorer
+from src.gimbal_control import ChassisRelativeGimbal
 from src.logger import SensorLogger
 from src.slam import CellWallGrid, OccupancyGridSLAM, SlamWorker
 
@@ -610,20 +611,20 @@ class ExplorationTests(unittest.TestCase):
         self.assertEqual(gimbal.recenter_calls, 0)
         self.assertAlmostEqual(gimbal.commands[-1][0], 5)
 
-    def test_scan_checks_pitch_in_moveto_reference_frame(self):
-        class GroundLevelGimbal(SimulatedGimbal):
+    def test_scan_checks_pitch_relative_to_chassis(self):
+        class ChassisLevelGimbal(SimulatedGimbal):
             def moveto(self, pitch, yaw, pitch_speed, yaw_speed):
                 super().moveto(pitch, yaw, pitch_speed, yaw_speed)
-                # A tilted chassis changes pitch relative to the chassis,
-                # while the commanded startup-reference pitch stays at zero.
-                self.logger.set("gimbal", (-5, self.yaw, 0, self.yaw),
+                # Ground pitch can drift with chassis tilt while the gimbal
+                # remains at the requested chassis-relative pitch.
+                self.logger.set("gimbal", (0, self.yaw, -5, self.yaw),
                                 self.scan_time + .001)
 
         slam_map = OccupancyGridSLAM(self.settings)
         slam_map.update((0, 0, 0), 2000)
         logger = FakeLogger()
         logger.set("attitude", (0, 0, 0))
-        gimbal = GroundLevelGimbal(slam_map, logger, 2000)
+        gimbal = ChassisLevelGimbal(slam_map, logger, 2000)
         explorer = DFSExplorer(None, gimbal, logger, slam_map, self.settings)
         explorer.base_pose = (0, 0, 0)
         explorer.slam_worker = FakeSlamWorker()
@@ -725,10 +726,18 @@ class ExplorationTests(unittest.TestCase):
         self.assertFalse(explorer._can_step((0, 0), (1, 0)))
         self.assertFalse(explorer.wall_grid.can_cross((0, 0), (1, 0)))
 
-    def test_installed_sdk_moveto_uses_chassis_relative_yaw(self):
-        from robomaster.gimbal import COORDINATE_YCPN, GimbalMoveAction
+    def test_dfs_gimbal_action_uses_chassis_frame_for_both_axes(self):
+        from robomaster.gimbal import COORDINATE_CAR
 
-        self.assertEqual(GimbalMoveAction()._coordinate, COORDINATE_YCPN)
+        sent = []
+        sdk_gimbal = SimpleNamespace(
+            _action_dispatcher=SimpleNamespace(send_action=sent.append))
+        action = ChassisRelativeGimbal(sdk_gimbal).moveto(
+            pitch=5, yaw=90, pitch_speed=30, yaw_speed=60)
+
+        self.assertIs(sent[0], action)
+        self.assertEqual(action._coordinate, COORDINATE_CAR)
+        self.assertEqual(action.encode()._coordinate, COORDINATE_CAR)
 
     def test_dfs_explores_and_backtracks_inside_a_simulated_room(self):
         range_provider = lambda pose, yaw: self.room_range(pose, yaw, half_extent=2.0)

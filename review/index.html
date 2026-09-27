@@ -363,6 +363,11 @@
           wallPanel.append(note);
         }
         const scanned=run.summary.exploration?.scanned_cells;
+        if (run.summary.exploration?.gimbal_pitch_frame === "chassis") {
+          const note=document.createElement("p");
+          note.textContent="หัวสแกนรักษา pitch เทียบตัวรถ ไม่ชดเชย pitch ของ chassis";
+          wallPanel.append(note);
+        }
         if (run.summary.exploration?.heading_source === "gimbal") {
           const note=document.createElement("p");
           note.textContent="การเดิน DFS ใช้ yaw จากมุม gimbal อ้างอิงพื้นลบมุมเทียบตัวรถ (ปรับศูนย์ครั้งแรกกับ yaw chassis)";
