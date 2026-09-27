@@ -21,6 +21,7 @@ DFS สแกนครบสี่ทิศเมื่อเข้าช่อ�
 ## Dashboard, export และ review
 
 - มุมมองปกติแสดงขอบกำแพงสีส้ม ทางเปิดสีเขียว ขอบอนุมานเป็นเส้นประ และขอบยังไม่รู้เป็นเส้นประเทา พร้อมพิกัดช่องและสถานะสี่ด้าน แกนจอ +X ขึ้น / +Y ขวา ส่วนแกนช่องอ้างอิง `base_pose`
+- ส่งออกภาพกริด DFS เป็น PNG ผ่านปุ่ม “ส่งออก Grid PNG” หรือ `/api/map/export?format=grid-png`; บันทึก `latest-grid.png` และ `map-grid.png` ในโฟลเดอร์รันโดยอัตโนมัติ ภาพนี้จัดแกนตามกริด (+X ขึ้น, +Y ขวา) และเก็บสีของกำแพง/ทางเปิด/ยังไม่รู้ แยกจากภาพ occupancy ละเอียด
 - ช่องเลือก “แสดง occupancy ละเอียด” เปิดกริดเดิมร่วมกับกำแพง จึงตรวจเทียบข้อมูลได้
 - `robomaster-occupancy-grid` ยังคง version 1 และลำดับ `data` เดิม เพิ่ม `exploration.cell_grid` version 1 ประกอบด้วย `cell_size_m`, `base_pose`, `current`, `cells[].index`, `cells[].sides` ซึ่งแต่ละด้านมี `state` และเมื่อวัดที่ช่องนั้นแล้วจะมี `source` (`direct`/`inferred`), `checked_from_here`, `observed_at` และเมื่อวัดตรงจะมี `range_mm`, `wall_threshold_mm`, `measured_from` (run เก่ายังอาจมี `required_range_mm`/`clearance_ok`)
 - Map JSON/ROS ZIP (`slam.json`) เก็บกริดกำแพงด้วย ส่วน ROS PGM คงเป็น occupancy ละเอียด การ import ตรวจ schema และขอบร่วมที่ขัดแย้งกันก่อนแก้ map; ไฟล์เดิมที่ไม่มี `cell_grid` ยังเปิดได้

@@ -13,6 +13,19 @@ MAP_FORMAT = "robomaster-occupancy-grid"
 MAP_VERSION = 1
 
 
+def _encode_png(width, height, rows, color_type):
+    """Encode already filtered 8-bit image rows without an image dependency."""
+    def chunk(kind, payload):
+        return (struct.pack(">I", len(payload)) + kind + payload +
+                struct.pack(">I", zlib.crc32(kind + payload) & 0xffffffff))
+
+    return (b"\x89PNG\r\n\x1a\n" +
+            chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8,
+                                        color_type, 0, 0, 0)) +
+            chunk(b"IDAT", zlib.compress(bytes(rows))) +
+            chunk(b"IEND", b""))
+
+
 def _wrap_degrees(angle):
     return (angle + 180.0) % 360.0 - 180.0
 
@@ -615,14 +628,7 @@ class OccupancyGridSLAM:
                 rows.append(0)  # PNG filter type: none
                 rows.extend(expanded)
 
-        def chunk(kind, payload):
-            return (struct.pack(">I", len(payload)) + kind + payload +
-                    struct.pack(">I", zlib.crc32(kind + payload) & 0xffffffff))
-
-        return (b"\x89PNG\r\n\x1a\n" +
-                chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 0, 0, 0, 0)) +
-                chunk(b"IDAT", zlib.compress(bytes(rows))) +
-                chunk(b"IEND", b""))
+        return _encode_png(width, height, rows, 0)
 
     def save_png(self, path):
         path = Path(path)
@@ -630,6 +636,136 @@ class OccupancyGridSLAM:
         temporary = path.with_suffix(path.suffix + ".tmp")
         temporary.write_bytes(self.png_bytes())
         temporary.replace(path)
+
+    def grid_png_bytes(self):
+        """Render the DFS cell grid with wall, open and unknown borders."""
+        exploration = self.to_dict().get("exploration", {})
+        grid = exploration.get("cell_grid")
+        if not isinstance(grid, dict) or not grid.get("cells"):
+            raise ValueError("DFS cell grid is unavailable")
+        cells = grid["cells"]
+        xs = [cell["index"][0] for cell in cells]
+        ys = [cell["index"][1] for cell in cells]
+        min_x, max_x, min_y, max_y = min(xs), max(xs), min(ys), max(ys)
+        span_x, span_y = max_x - min_x + 3, max_y - min_y + 3
+        cell_px = min(64, 4096 // max(span_x, span_y))
+        if cell_px < 2:
+            raise ValueError("DFS cell grid is too large for PNG export")
+        width, height = span_y * cell_px, span_x * cell_px
+        pixels = bytearray(bytes((9, 20, 29)) * (width * height))
+
+        def pixel(px, py, color):
+            if 0 <= px < width and 0 <= py < height:
+                offset = (py * width + px) * 3
+                pixels[offset:offset + 3] = bytes(color)
+
+        def line(x0, y0, x1, y1, color, thickness=1, dashed=False):
+            steps = max(abs(x1 - x0), abs(y1 - y0))
+            for step in range(steps + 1):
+                if dashed and (step // 8) % 2:
+                    continue
+                px = round(x0 + (x1 - x0) * step / max(steps, 1))
+                py = round(y0 + (y1 - y0) * step / max(steps, 1))
+                for dy in range(-(thickness // 2), (thickness + 1) // 2):
+                    for dx in range(-(thickness // 2), (thickness + 1) // 2):
+                        pixel(px + dx, py + dy, color)
+
+        def bounds(index):
+            ix, iy = index
+            left = (iy - min_y + 1) * cell_px
+            top = (max_x - ix + 1) * cell_px
+            return left, top, left + cell_px, top + cell_px
+
+        visited = {tuple(node) for node in exploration.get("visited", [])}
+        current = tuple(grid["current"]) if grid.get("current") is not None else None
+        for cell in cells:
+            index = tuple(cell["index"])
+            left, top, right, bottom = bounds(index)
+            fill = ((25, 68, 55) if index == current else
+                    (23, 55, 70) if index in visited else (18, 42, 55))
+            row = bytes(fill) * cell_px
+            for py in range(top, bottom):
+                offset = (py * width + left) * 3
+                pixels[offset:offset + len(row)] = row
+
+        stack = exploration.get("stack", [])
+        for first, second in zip(stack, stack[1:]):
+            left_a, top_a, _, _ = bounds(first)
+            left_b, top_b, _, _ = bounds(second)
+            half = cell_px // 2
+            line(left_a + half, top_a + half, left_b + half, top_b + half,
+                 (105, 217, 255), 3)
+
+        for cell in cells:
+            left, top, right, bottom = bounds(cell["index"])
+            ends = {"x+": (left, top, right, top),
+                    "x-": (left, bottom, right, bottom),
+                    "y-": (left, top, left, bottom),
+                    "y+": (right, top, right, bottom)}
+            for side, points in ends.items():
+                info = cell["sides"][side]
+                state = info["state"]
+                color = ((255, 184, 104) if state == "wall" else
+                         (140, 241, 210) if state == "open" else (113, 133, 148))
+                line(*points, color, 4 if state == "wall" else 2,
+                     state == "unknown" or info.get("source") == "inferred")
+
+        glyphs = {
+            "0": ("111", "101", "101", "101", "111"),
+            "1": ("010", "110", "010", "010", "111"),
+            "2": ("111", "001", "111", "100", "111"),
+            "3": ("111", "001", "111", "001", "111"),
+            "4": ("101", "101", "111", "001", "001"),
+            "5": ("111", "100", "111", "001", "111"),
+            "6": ("111", "100", "111", "101", "111"),
+            "7": ("111", "001", "010", "010", "010"),
+            "8": ("111", "101", "111", "101", "111"),
+            "9": ("111", "101", "111", "001", "111"),
+            "-": ("000", "000", "111", "000", "000"),
+            ",": ("000", "000", "000", "010", "100"),
+        }
+        if cell_px >= 24:
+            text_scale = 2 if cell_px >= 48 else 1
+            for cell in cells:
+                left, top, _, _ = bounds(cell["index"])
+                label = f"{cell['index'][0]},{cell['index'][1]}"
+                text_width = (len(label) * 4 - 1) * text_scale
+                if text_width > cell_px - 8:
+                    continue
+                start_x = left + (cell_px - text_width) // 2
+                start_y = top + (cell_px - 5 * text_scale) // 2
+                for char_index, char in enumerate(label):
+                    for row_index, row in enumerate(glyphs[char]):
+                        for column_index, bit in enumerate(row):
+                            if bit == "1":
+                                for sy in range(text_scale):
+                                    for sx in range(text_scale):
+                                        pixel(start_x + (char_index * 4 + column_index) *
+                                              text_scale + sx,
+                                              start_y + row_index * text_scale + sy,
+                                              (169, 191, 203))
+
+        rows = bytearray()
+        stride = width * 3
+        for py in range(height):
+            rows.append(0)
+            rows.extend(pixels[py * stride:(py + 1) * stride])
+        return _encode_png(width, height, rows, 2)
+
+    def save_grid_png(self, path):
+        path = Path(path)
+        try:
+            content = self.grid_png_bytes()
+        except ValueError as error:
+            if str(error) != "DFS cell grid is unavailable":
+                raise
+            path.unlink(missing_ok=True)
+            return False
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(path.suffix + ".tmp")
+        temporary.write_bytes(content)
+        temporary.replace(path)
+        return True
 
     def ros_map_archive(self):
         """Build a ZIP containing ROS map_server YAML/PGM and the source JSON."""
@@ -778,8 +914,10 @@ class SlamWorker:
         if save_path:
             self.map.save_file(save_path)
             self.map.save_png(Path(save_path).with_suffix(".png"))
+            self.map.save_grid_png(Path(save_path).with_name(Path(save_path).stem + "-grid.png"))
         if run_dir:
             self.map.save_png(Path(run_dir) / "map.png")
+            self.map.save_grid_png(Path(run_dir) / "map-grid.png")
 
     def status(self):
         with self.lock:

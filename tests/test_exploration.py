@@ -18,7 +18,7 @@ from src.config_loader import load_config
 from src.dashboard import Dashboard
 from src.explorer import DFSExplorer
 from src.logger import SensorLogger
-from src.slam import OccupancyGridSLAM, SlamWorker
+from src.slam import CellWallGrid, OccupancyGridSLAM, SlamWorker
 
 
 class FakeLogger:
@@ -240,6 +240,50 @@ class ExplorationTests(unittest.TestCase):
             rows = zlib.decompress(image_data)
             self.assertEqual(rows[1:9], bytes([255] * 4 + [205] * 4))
             self.assertEqual(rows[-8:], bytes([0] * 4 + [205] * 4))
+            self.assertFalse(path.with_name("latest-grid.png").exists())
+
+    def test_grid_png_marks_wall_open_unknown_and_current_cell(self):
+        slam_map = self.make_map()
+        wall_grid = CellWallGrid(.6, 10)
+        now = time.time()
+        wall_grid.observe((0, 0), (1, 0), .175, 100, 300, now)
+        wall_grid.observe((0, 0), (0, 1), .675, 600, 300, now)
+        slam_map.set_exploration_state({
+            "status": "exploring", "visited": [[0, 0]], "stack": [[0, 0]],
+            "cell_grid": wall_grid.snapshot((0, 0, 0), (0, 0)),
+        })
+        png = slam_map.grid_png_bytes()
+        self.assertTrue(png.startswith(b"\x89PNG\r\n\x1a\n"))
+        width, height = struct.unpack(">II", png[16:24])
+        payload, offset = bytearray(), 8
+        while offset < len(png):
+            length = struct.unpack(">I", png[offset:offset + 4])[0]
+            if png[offset + 4:offset + 8] == b"IDAT":
+                payload.extend(png[offset + 8:offset + 8 + length])
+            offset += length + 12
+        raw = zlib.decompress(payload)
+
+        def color(x, y):
+            start = y * (1 + width * 3) + 1 + x * 3
+            return tuple(raw[start:start + 3])
+
+        indices = [cell["index"] for cell in wall_grid.snapshot((0, 0, 0), (0, 0))["cells"]]
+        min_y = min(index[1] for index in indices)
+        max_x = max(index[0] for index in indices)
+        left, top = (0 - min_y + 1) * 64, (max_x - 0 + 1) * 64
+        self.assertEqual(color(left + 32, top), (255, 184, 104))
+        self.assertEqual(color(left + 64, top + 32), (140, 241, 210))
+        self.assertEqual(color(left + 32, top + 64), (113, 133, 148))
+        self.assertEqual(color(left + 8, top + 8), (25, 68, 55))
+
+        dashboard = self.make_dashboard(slam_map)
+        self.assertTrue(self.request(dashboard, "do_GET", "/api/map/export?format=grid-png")
+                        .startswith(b"\x89PNG\r\n\x1a\n"))
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "latest.json"
+            SlamWorker(FakeLogger(), slam_map, self.settings).stop(path, Path(temp) / "run")
+            self.assertEqual(path.with_name("latest-grid.png").read_bytes(), png)
+            self.assertEqual((Path(temp) / "run" / "map-grid.png").read_bytes(), png)
 
     def test_gimbal_tof_beam_uses_yaw_axis_offset_and_selected_channel(self):
         settings = copy.deepcopy(self.settings)

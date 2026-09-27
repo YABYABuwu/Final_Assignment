@@ -95,7 +95,7 @@ exploration:
     robot_clearance_m: 0.20 # ระยะจากหัว ToF ที่ไม่ทำแผนที่ใต้ตัวหุ่น; ไม่ใช่เกณฑ์รับ/ปฏิเสธค่า
     free_update: -0.40
     occupied_update: 0.85
-    save_path: data/maps/latest.json # จบรันบันทึก JSON และ PNG ชื่อเดียวกัน (latest.png)
+    save_path: data/maps/latest.json # จบรันบันทึก JSON, occupancy PNG และ grid PNG
     load_path: null       # ใส่ path ของไฟล์ JSON ที่เคยส่งออก เมื่อต้องการอ่านกลับ
   scan_match:
     translation_m: 0.10

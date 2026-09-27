@@ -74,7 +74,7 @@
         <p class="camera-note muted" id="camera-note">รอภาพจากกล้อง…</p>
       </section>
       <section class="card">
-        <div class="card-head"><h2>แผนที่ SLAM / DFS</h2><div class="map-actions"><button id="export-json" type="button">ส่งออก JSON</button><button id="export-png" type="button">ส่งออก PNG</button><button id="export-ros" type="button">ส่งออก ROS</button><button id="load-map" type="button">เปิด JSON</button><input id="map-file" type="file" accept="application/json,.json" hidden></div></div>
+        <div class="card-head"><h2>แผนที่ SLAM / DFS</h2><div class="map-actions"><button id="export-json" type="button">ส่งออก JSON</button><button id="export-png" type="button">ส่งออก PNG</button><button id="export-grid-png" type="button">ส่งออก Grid PNG</button><button id="export-ros" type="button">ส่งออก ROS</button><button id="load-map" type="button">เปิด JSON</button><input id="map-file" type="file" accept="application/json,.json" hidden></div></div>
         <div class="map-wrap">
           <label class="muted"><input id="fine-map" type="checkbox"> แสดง occupancy ละเอียด</label>
           <canvas id="map" aria-label="เส้นทาง ตำแหน่ง และทิศหุ่นยนต์"></canvas>
@@ -502,6 +502,7 @@
     window.addEventListener("resize", () => { drawMap(); Object.keys(chartCards).forEach(drawChart); });
     document.getElementById("export-json").addEventListener("click", () => { window.location.href = "/api/map/export?format=json"; });
     document.getElementById("export-png").addEventListener("click", () => { window.location.href = "/api/map/export?format=png"; });
+    document.getElementById("export-grid-png").addEventListener("click", () => { window.location.href = "/api/map/export?format=grid-png"; });
     document.getElementById("export-ros").addEventListener("click", () => { window.location.href = "/api/map/export?format=ros"; });
     document.getElementById("load-map").addEventListener("click", () => document.getElementById("map-file").click());
     document.getElementById("map-file").addEventListener("change", async event => {
