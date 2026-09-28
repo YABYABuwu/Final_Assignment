@@ -5,6 +5,7 @@ import time
 
 from src.PID import PIDController
 from src.mission_stop import MissionStop
+from src.rear_ir import recovery_vector
 
 
 def angle_error(target, current):
@@ -24,6 +25,7 @@ class ChassisController:
         self.heading_reference = None
         self.gimbal_heading_offset = None
         self.commanded_lateral_m_s = 0.0
+        self.rear_ir = None
 
     def reset_heading(self):
         """Use the current heading as the reference on the next move_to call."""
@@ -63,6 +65,83 @@ class ChassisController:
             yaw = angle_error(observed + self.gimbal_heading_offset, 0)
         return position[0], position[1], yaw
 
+    def _recover_from_ir(self, side, attempt, period, deadline, abort_event, pause_if):
+        """Move away from active rear IRs for one bounded recovery attempt."""
+        bumper = self.rear_ir
+        settings = bumper.settings
+        forward = settings["recovery_speed_m_s"]
+        origin = None
+        last_pose = None
+        last_sample_time = None
+        clear_count = 0
+        commanded_m = 0.0
+        status = "stopped"
+        reason = None
+        bumper.recovering = side
+        try:
+            while True:
+                if abort_event is not None and abort_event.is_set():
+                    raise MissionStop("IR recovery aborted because exploration telemetry failed")
+                if deadline is not None and time.monotonic() >= deadline:
+                    raise MissionStop("IR recovery exceeded waypoint time")
+                if pause_if is not None and pause_if():
+                    self.stop()
+                    clear_count = 0
+                    time.sleep(period)
+                    continue
+                state = bumper.snapshot()
+                sensors = state["sides"]
+                pose = self.get_pose()
+                if (any(sensor["detected"] is None for sensor in sensors.values()) or
+                        pose is None):
+                    self.stop()
+                    clear_count = 0
+                    time.sleep(period)
+                    continue
+                if origin is None:
+                    origin = pose
+                last_pose = pose
+                traveled_m = math.hypot(pose[0] - origin[0], pose[1] - origin[1])
+                if (traveled_m >= settings["recovery_max_m"] or
+                        commanded_m >= settings["recovery_max_m"]):
+                    status = "limit"
+                    reason = "rear IR {} still blocked after one recovery attempt".format(side)
+                    return False
+                sample_time = state["sample_time"]
+                new_sample = sample_time != last_sample_time
+                if new_sample:
+                    both_clear = all(sensor["detected"] is False for sensor in sensors.values())
+                    clear_count = clear_count + 1 if both_clear else 0
+                    last_sample_time = sample_time
+                if clear_count >= settings["recovery_clear_samples"]:
+                    status = "cleared"
+                    bumper.last_block = None
+                    return True
+                if not new_sample:
+                    self.stop()
+                    time.sleep(period)
+                    continue
+                direction, escape_x, escape_y = recovery_vector(
+                    sensors, forward, attempt=attempt)
+                if direction == "clear":
+                    # Hold still while confirming consecutive clear samples.
+                    self.stop()
+                    time.sleep(period)
+                    continue
+                bumper.recovering = direction
+                self.chassis.drive_speed(x=escape_x, y=escape_y, z=0)
+                self.commanded_lateral_m_s = escape_y
+                commanded_m += forward * period
+                time.sleep(period)
+        except MissionStop as error:
+            reason = str(error)
+            raise
+        finally:
+            self.stop()
+            distance_m = (math.hypot(last_pose[0] - origin[0], last_pose[1] - origin[1])
+                          if origin is not None and last_pose is not None else 0.0)
+            bumper.finish_recovery(side, status, distance_m, reason)
+
     def move_to(self, x, y, yaw=None, timeout_s=None, abort_event=None,
                 disable_timeout=False, stop_if=None, pause_if=None):
         """Drive toward an absolute (x, y) waypoint; optionally face yaw.
@@ -86,6 +165,7 @@ class ChassisController:
         deadline = None if timeout is None else time.monotonic() + timeout
         previous = time.monotonic()
         target_yaw = yaw
+        recovery_attempts = 0
         if yaw is not None:
             self.heading_reference = yaw
         try:
@@ -160,6 +240,27 @@ class ChassisController:
                 # using it as a deadband lets yaw drift during long slides.
                 turn = (self.pid_yaw.compute(heading_error, dt)
                         if target_yaw is not None else 0)
+                if self.rear_ir is not None and self.rear_ir.blocks_motion(vx_robot, vy_robot, turn):
+                    self.stop()
+                    if self.rear_ir.last_block != "waiting_data":
+                        side = self.rear_ir.last_block
+                        if recovery_attempts >= self.rear_ir.settings["recovery_max_attempts"]:
+                            raise MissionStop(
+                                "rear IR {} still blocked after {} recovery attempts".format(
+                                    side, recovery_attempts))
+                        recovery_attempts += 1
+                        cleared = self._recover_from_ir(
+                            side, recovery_attempts, period, deadline, abort_event, pause_if)
+                        if (not cleared and recovery_attempts >=
+                                self.rear_ir.settings["recovery_max_attempts"]):
+                            raise MissionStop(
+                                "rear IR {} still blocked after {} recovery attempts".format(
+                                    side, recovery_attempts))
+                    for pid in (self.pid_x, self.pid_y, self.pid_yaw):
+                        pid.reset()
+                    previous = time.monotonic()
+                    time.sleep(period)
+                    continue
                 self.chassis.drive_speed(x=vx_robot, y=vy_robot, z=turn)
                 self.commanded_lateral_m_s = vy_robot
                 time.sleep(period)

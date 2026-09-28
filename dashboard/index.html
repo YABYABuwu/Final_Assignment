@@ -74,6 +74,10 @@
         <p class="camera-note muted" id="camera-note">รอภาพจากกล้อง…</p>
       </section>
       <section class="card">
+        <div class="card-head"><h2>IR กันชนหลัง</h2><span class="muted">IO · ID 3/4 port 1</span></div>
+        <div class="map-info"><div>หลังขวา&nbsp; <strong id="ir-right">—</strong></div><div>หลังซ้าย&nbsp; <strong id="ir-left">—</strong></div><div id="ir-state">รอข้อมูล IR</div></div>
+      </section>
+      <section class="card">
         <div class="card-head"><h2>แผนที่ SLAM / DFS</h2><div class="map-actions"><button id="export-json" type="button">ส่งออก JSON</button><button id="export-png" type="button">ส่งออก PNG</button><button id="export-grid-png" type="button">ส่งออก Grid PNG</button><button id="export-ros" type="button">ส่งออก ROS</button><button id="load-map" type="button">เปิด JSON</button><input id="map-file" type="file" accept="application/json,.json" hidden></div></div>
         <div class="map-wrap">
           <label class="muted"><input id="fine-map" type="checkbox"> แสดง occupancy ละเอียด</label>
@@ -366,7 +370,9 @@
       document.getElementById("dfs-status").textContent = scanProgress ? `สแกน ${scanProgress[1]}/${scanProgress[2]} ทิศ` :
         backtrackTarget ? `กลับช่อง ${backtrackTarget[1]},${backtrackTarget[2]} · ใช้ขอบที่บันทึกไว้` :
         dfsStatus === "returning_to_start" ? "กลับจุดเริ่ม · ใช้ขอบที่บันทึกไว้" :
+        dfsStatus === "centering_gimbal" ? "กำลังตั้งศูนย์ gimbal ก่อนเริ่ม DFS" :
         dfsStatus === "waiting_gimbal_action" ? "รอ SDK ยืนยันว่าหัวหมุนเสร็จ" :
+        dfsStatus === "waiting_gimbal_alignment" ? "รอมุม gimbal เข้าช่วงที่กำหนด" :
         dfsStatus === "waiting_tof" ? "รอระยะ ToF ที่ใช้ได้" :
         dfsStatus === "waiting_telemetry" ? "หยุดล้อชั่วคราว · รอข้อมูลเซนเซอร์ใหม่" :
         dfsStatus === "waiting_slam_scan" ? "รอข้อมูล SLAM ใหม่หลังเดิน" :
@@ -509,6 +515,26 @@
           drawChart(name);
         }
         document.getElementById("mission").textContent = status.mission_status;
+        const ir = status.rear_ir;
+        for (const side of ["right", "left"]) {
+          const sensor = ir?.sides?.[side];
+          const label = document.getElementById(`ir-${side}`);
+          label.textContent = !ir?.enabled ? "ปิด" :
+            sensor?.detected == null ? "รอข้อมูล" :
+            `${sensor.detected ? "พบสิ่งกีดขวาง" : "ว่าง"} (IO ${sensor.io})`;
+          label.style.color = sensor?.detected ? "#ffb868" : "";
+        }
+        document.getElementById("ir-state").textContent = !ir?.enabled ? "ระบบ IR ปิด" :
+          ir.state === "waiting_data" ? "ข้อมูล IR ขาด/เก่า · หยุดการเคลื่อนที่เสี่ยง" :
+          ir.recovering ? ({
+            forward: "กำลังเลื่อนหน้า",
+            slide_right: "กำลังสไลด์ขวา",
+            slide_left: "กำลังสไลด์ซ้าย",
+            front_right: "กำลังสไลด์ทแยงหน้าขวา",
+            front_left: "กำลังสไลด์ทแยงหน้าซ้าย",
+          }[ir.recovering] || `กำลังหลบ IR (${ir.recovering})`) :
+          ir.blocked ? `หยุดล้อ: ${ir.blocked === "waiting_data" ? "รอข้อมูล IR" : `IR หลัง${ir.blocked === "both" ? "ทั้งสองด้าน" : ir.blocked === "right" ? "ขวา" : "ซ้าย"}`}` :
+          "พร้อม · ถอย/สไลด์/หมุนเมื่อแนวด้านหลังว่าง";
         document.getElementById("acceleration").textContent = status.motion_settings?.max_lateral_accel_m_s2 != null
           ? `${number(status.motion_settings.max_lateral_accel_m_s2, 2)} m/s²` : "— m/s²";
         document.getElementById("connection").textContent = "● เชื่อมต่อแล้ว";
@@ -521,6 +547,12 @@
         document.getElementById("dfs-status").textContent = status.exploration?.status || (status.slam ? (status.slam.ready ? "SLAM ready" : "SLAM waiting") : "ปิด");
         if (status.slam?.error) document.getElementById("map-message").textContent = `หยุด SLAM: ${status.slam.error}`;
         drawMap();
+        const alignment = status.exploration?.scan_alignment;
+        if (status.exploration?.status === "waiting_gimbal_alignment" && alignment) {
+          document.getElementById("map-message").textContent =
+            `gimbal yaw ${number(alignment.actual_yaw_deg)}° / ${number(alignment.target_yaw_deg)}° (±${number(alignment.yaw_tolerance_deg)}°)` +
+            ` · pitch ${number(alignment.actual_pitch_deg)}° / ${number(alignment.target_pitch_deg)}° (±${number(alignment.pitch_tolerance_deg)}°)`;
+        }
         if (status.slam?.waiting_telemetry && !status.slam.error) document.getElementById("map-message").textContent = "ข้อมูลเซนเซอร์ขาดช่วง · หยุดล้อและรอข้อมูลใหม่";
         if (status.slam?.tof_waiting && !status.slam.error && !status.slam.waiting_telemetry) document.getElementById("map-message").textContent = "รอ ToF ค่าที่ใช้ได้ · ยังไม่ใช้ 0 มม. ตัดสินใจเดิน";
       } catch (error) {
