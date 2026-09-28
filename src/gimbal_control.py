@@ -23,3 +23,7 @@ class ChassisRelativeGimbal:
         )
         self.gimbal._action_dispatcher.send_action(action)
         return action
+
+    def recenter(self, pitch_speed=30, yaw_speed=60):
+        """Use the SDK's physical center action before DFS starts."""
+        return self.gimbal.recenter(pitch_speed=pitch_speed, yaw_speed=yaw_speed)

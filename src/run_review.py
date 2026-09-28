@@ -95,6 +95,12 @@ class RunStore:
             if alignment.get("status") == "stalled" or alignment.get("status", "").startswith("skipped_"):
                 issues.append({"level": "warning", "time_s": None,
                                "message": f"Alignment {cell}: {alignment.get('reason') or alignment['status']}"})
+        for recovery in summary.get("rear_ir_recoveries", []):
+            issues.append({"level": "warning" if recovery["status"] != "cleared" else "info",
+                           "time_s": recovery["elapsed_s"],
+                           "message": "Rear IR {} recovery {} ({:.3f} m){}".format(
+                               recovery["side"], recovery["status"], recovery["distance_m"],
+                               ": " + recovery["reason"] if recovery.get("reason") else "")})
 
         for path in sorted(run_path.glob("*.csv")):
             if not path.is_file() or path.is_symlink():
@@ -120,6 +126,7 @@ class RunStore:
             active_flags = {}
             tof_was_close = False
             tof_was_invalid = False
+            ir_was_detected = {"right": False, "left": False}
             stream_frequency = summary.get("stream_settings", {}).get(name_of_stream, {}).get("frequency_hz")
             gap_limit = max(1.5, 3 / stream_frequency) if isinstance(stream_frequency, (int, float)) and stream_frequency > 0 else 1.5
 
@@ -127,6 +134,13 @@ class RunStore:
                 reader = csv.DictReader(file)
                 columns = [field for field in (reader.fieldnames or [])
                            if field not in ("timestamp", "elapsed_s", "relative_time")]
+                ir_settings = summary.get("rear_ir_settings") if name_of_stream == "adapter" else None
+                ir_column_indices = {}
+                if ir_settings:
+                    for side in ("right", "left"):
+                        port = ir_settings[side]
+                        column = "io_{}".format((port["id"] - 1) * 2 + port["port"])
+                        ir_column_indices[side] = columns.index(column) if column in columns else None
                 for row_number, row in enumerate(reader):
                     time_text = row.get("elapsed_s") or row.get("relative_time")
                     try:
@@ -156,6 +170,17 @@ class RunStore:
                                 issues.append({"level": "warning", "time_s": round(elapsed, 2),
                                                "message": f"status: {short_name} detected"})
                             active_flags[short_name] = active
+
+                    if ir_settings:
+                        for side in ("right", "left"):
+                            index = ir_column_indices[side]
+                            io = values[index] if index is not None else None
+                            active_io = ir_settings[side].get("active_io", ir_settings.get("active_io"))
+                            detected = io == active_io if io in (0, 1) else False
+                            if detected and not ir_was_detected[side] and len(issues) < 80:
+                                issues.append({"level": "warning", "time_s": round(elapsed, 2),
+                                               "message": f"Rear IR {side} detected (IO {int(io)})"})
+                            ir_was_detected[side] = detected
 
                     if name_of_stream == "tof" and values:
                         distance = values[0]

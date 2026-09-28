@@ -32,6 +32,7 @@ class DFSExplorer:
         self.alignments = {}
         self.last_motion_heading = None
         self.last_motion_stop = None
+        self.scan_alignment = None
         self.wall_grid = CellWallGrid(
             settings["step_m"], min(1000, math.ceil(math.hypot(
                 settings["map"]["width_m"], settings["map"]["height_m"]
@@ -61,6 +62,7 @@ class DFSExplorer:
                 "emergency_stop_distance_m": self.settings["emergency_stop_distance_m"],
                 "last_motion_heading": self.last_motion_heading,
                 "last_motion_stop": self.last_motion_stop,
+                "scan_alignment": self.scan_alignment,
                 "tof_median_window": self.settings["tof_median_window"],
                 "cell_targets": {f"{node[0]},{node[1]}": list(point)
                                  for node, point in sorted(self.cell_targets.items())},
@@ -192,6 +194,39 @@ class DFSExplorer:
             raise MissionStop("gimbal cannot reach the requested direction within its yaw limits")
         return min(reachable, key=lambda angle: abs(angle - current_relative_yaw))
 
+    def _prepare_gimbal(self):
+        """Physically center the head once and wait for SDK completion."""
+        if not self.settings["gimbal"]["auto_recenter"]:
+            return
+        self._set_status("centering_gimbal")
+        request_time = time.time()
+        action = self.gimbal.recenter(
+            pitch_speed=self.settings["gimbal"]["recenter_speed_deg_s"],
+            yaw_speed=self.settings["gimbal"]["recenter_speed_deg_s"],
+        )
+        if action is not None:
+            while not getattr(action, "has_succeeded", False):
+                state = getattr(action, "state", None)
+                if state in ("action_failed", "action_rejected", "action_exception", "action_aborted"):
+                    raise MissionStop("gimbal recenter failed: {}".format(state))
+                worker_status = self.slam_worker.status()
+                if worker_status["error"]:
+                    raise MissionStop(worker_status["error"])
+                time.sleep(0.03)
+            wait_for_completed = getattr(action, "wait_for_completed", None)
+            if callable(wait_for_completed) and not wait_for_completed():
+                raise MissionStop("gimbal SDK reported recenter success but did not release its action")
+        while True:
+            yaw, pitch, timestamp = self._gimbal_sample()
+            if timestamp > request_time:
+                break
+            time.sleep(0.03)
+        if (abs(_wrap_degrees(yaw)) > self.settings["gimbal"]["angle_tolerance_deg"] or
+                abs(pitch) > self.settings["gimbal"]["pitch_tolerance_deg"]):
+            raise MissionStop(
+                "gimbal recenter did not reach center: yaw {:.1f}, pitch {:.1f}".format(
+                    yaw, pitch))
+
     def _scan_for_direction(self, delta):
         """Point the single ToF toward a candidate cell and wait for its new scan."""
         worker_status = self.slam_worker.status() if self.slam_worker is not None else None
@@ -207,6 +242,7 @@ class DFSExplorer:
         command_yaw = self._command_yaw(target_yaw, current_yaw)
         request_time = time.time()
         tolerance = self.settings["gimbal"]["angle_tolerance_deg"]
+        pitch_tolerance = self.settings["gimbal"]["pitch_tolerance_deg"]
         # Center yaw without recenter(), which uses a separate SDK action and
         # previously remained active after angle telemetry had settled.
         if abs(target_yaw) <= tolerance:
@@ -222,13 +258,16 @@ class DFSExplorer:
 
         aligned = False
         measured_yaw = current_yaw
-        waiting_for_action = False
-        waiting_for_tof = False
         action_confirmed = action is None
         median_window = self.settings["tof_median_window"]
         samples = []
         last_sample_timestamp = request_time
         collection_after = request_time if action_confirmed else None
+        completion_time = request_time if action_confirmed else None
+        settled_count = 0
+        settled_angle = None
+        last_alignment_timestamp = request_time
+        alignment_retries = 0
         while True:
             worker_status = self.slam_worker.status() if self.slam_worker is not None else None
             if worker_status is not None and worker_status["error"]:
@@ -239,7 +278,7 @@ class DFSExplorer:
             measured_yaw, measured_pitch, angle_timestamp = self._gimbal_sample()
             aligned = (angle_timestamp > request_time and
                        abs(_wrap_degrees(target_yaw - measured_yaw)) <= tolerance and
-                       abs(self.settings["gimbal"]["pitch_deg"] - measured_pitch) <= tolerance)
+                       abs(self.settings["gimbal"]["pitch_deg"] - measured_pitch) <= pitch_tolerance)
 
             action_complete = action is None or getattr(action, "has_succeeded", False)
             if action_complete and not action_confirmed:
@@ -250,10 +289,49 @@ class DFSExplorer:
                 if callable(wait_for_completed) and not wait_for_completed():
                     raise MissionStop("gimbal SDK reported success but did not release its action")
                 action_confirmed = True
+                completion_time = time.time()
                 if median_window > 1:
                     collection_after = time.time()
                 else:
                     collection_after = request_time
+
+            # A completed SDK action can still leave the measured head off target.
+            # Retry once only after fresh, unchanged telemetry confirms it settled.
+            if (action is not None and action_confirmed and not aligned and
+                    angle_timestamp > completion_time and
+                    angle_timestamp > last_alignment_timestamp):
+                angles = (measured_yaw, measured_pitch)
+                if (settled_angle is not None and
+                        abs(_wrap_degrees(angles[0] - settled_angle[0])) <= 0.25 and
+                        abs(angles[1] - settled_angle[1]) <= 0.25):
+                    settled_count += 1
+                else:
+                    settled_count = 1
+                settled_angle = angles
+                last_alignment_timestamp = angle_timestamp
+                if settled_count >= 3:
+                    if alignment_retries:
+                        raise MissionStop(
+                            "gimbal alignment failed after retry: yaw target {:.1f}, actual {:.1f}; "
+                            "pitch target {:.1f}, actual {:.1f}".format(
+                                target_yaw, measured_yaw,
+                                self.settings["gimbal"]["pitch_deg"], measured_pitch))
+                    alignment_retries += 1
+                    request_time = time.time()
+                    action = self.gimbal.moveto(
+                        pitch=self.settings["gimbal"]["pitch_deg"], yaw=command_yaw,
+                        pitch_speed=30,
+                        yaw_speed=self.settings["gimbal"]["yaw_speed_deg_s"],
+                    )
+                    action_confirmed = action is None
+                    completion_time = request_time if action_confirmed else None
+                    collection_after = request_time if action_confirmed else None
+                    last_sample_timestamp = request_time
+                    last_alignment_timestamp = request_time
+                    settled_count = 0
+                    settled_angle = None
+                    samples.clear()
+                    continue
 
             scan_timestamp = self.map.latest_scan_timestamp
             scan_yaw = self.map.latest_gimbal_yaw_deg
@@ -265,19 +343,28 @@ class DFSExplorer:
                     abs(_wrap_degrees(target_yaw - scan_yaw)) <= tolerance and
                     scan_range is not None and
                     time.time() - scan_timestamp <= self.settings["max_sample_age_s"] * 2)
-            if action_confirmed and (worker_status or {}).get("tof_waiting", False):
-                if not waiting_for_tof:
-                    self._set_status("waiting_tof")
-                    waiting_for_tof = True
-            elif waiting_for_tof:
-                self._set_status("scanning")
-                waiting_for_tof = False
-            if scan_ready and not action_confirmed and not waiting_for_action:
-                self._set_status("waiting_gimbal_action")
-                waiting_for_action = True
-            elif action_confirmed and waiting_for_action:
-                self._set_status(previous_status)
-                waiting_for_action = False
+            with self.lock:
+                self.scan_alignment = {
+                    "target_yaw_deg": round(target_yaw, 2),
+                    "actual_yaw_deg": round(measured_yaw, 2),
+                    "yaw_tolerance_deg": tolerance,
+                    "target_pitch_deg": self.settings["gimbal"]["pitch_deg"],
+                    "actual_pitch_deg": round(measured_pitch, 2),
+                    "pitch_tolerance_deg": pitch_tolerance,
+                    "aligned": aligned,
+                    "action_confirmed": action_confirmed,
+                    "alignment_retries": alignment_retries,
+                }
+            if not action_confirmed:
+                scan_status = "waiting_gimbal_action"
+            elif not aligned:
+                scan_status = "waiting_gimbal_alignment"
+            elif (worker_status or {}).get("tof_waiting", False):
+                scan_status = "waiting_tof"
+            else:
+                scan_status = "scanning"
+            if self.status != scan_status:
+                self._set_status(scan_status)
             if (action_confirmed and scan_ready and
                     scan_timestamp > collection_after and
                     not (worker_status or {}).get("tof_waiting", False)):
@@ -286,6 +373,8 @@ class DFSExplorer:
                 samples.append((scan_timestamp, float(scan_range)))
                 last_sample_timestamp = scan_timestamp
                 if len(samples) >= median_window:
+                    with self.lock:
+                        self.scan_alignment = None
                     self._set_status(previous_status)
                     return float(statistics.median(value for _, value in samples)), world_yaw
             time.sleep(0.03)
@@ -562,9 +651,14 @@ class DFSExplorer:
                 self._set_status(previous_status)
             target_yaw = _wrap_degrees(world_yaw - pose[2] - sensor_yaw_offset)
             tolerance = self.settings["gimbal"]["angle_tolerance_deg"]
+            pitch_tolerance = self.settings["gimbal"]["pitch_tolerance_deg"]
             if (abs(_wrap_degrees(target_yaw - scan_yaw)) > tolerance or
-                    abs(self.settings["gimbal"]["pitch_deg"] - scan_pitch) > tolerance):
-                raise MissionStop("movement ToF no longer points in the travel direction")
+                    abs(self.settings["gimbal"]["pitch_deg"] - scan_pitch) > pitch_tolerance):
+                raise MissionStop(
+                    "movement ToF alignment lost: yaw target {:.1f}, actual {:.1f}; "
+                    "pitch target {:.1f}, actual {:.1f}".format(
+                        target_yaw, scan_yaw,
+                        self.settings["gimbal"]["pitch_deg"], scan_pitch))
             scan_distance = self.map._range_value(tof[0])
             if scan_distance is None:
                 return False
@@ -626,6 +720,7 @@ class DFSExplorer:
         try:
             self._set_status("starting")
             slam_worker.wait_ready()
+            self._prepare_gimbal()
             pose = self.map.pose
             if pose is None:
                 raise MissionStop("SLAM has no initial pose")

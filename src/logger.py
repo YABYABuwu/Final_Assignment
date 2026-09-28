@@ -236,6 +236,8 @@ class SensorLogger:
                 "received_rows": self.received_rows,
                 "stream_settings": self.stream_settings,
                 "motion_settings": getattr(self, "motion_settings", None),
+                "rear_ir_settings": getattr(self, "rear_ir_settings", None),
+                "rear_ir_recoveries": getattr(self, "rear_ir_recoveries", []),
                 "logger_errors": errors,
                 "exploration": self.exploration_state,
             }

@@ -106,6 +106,44 @@ class ReviewTests(unittest.TestCase):
             messages = [issue["message"] for issue in result["issues"]]
             self.assertEqual(messages.count("ToF #0 returned 0 mm; scan skipped"), 2)
 
+    def test_rear_ir_events_follow_saved_polarity_and_port_mapping(self):
+        with tempfile.TemporaryDirectory() as temp:
+            run_dir = Path(temp) / "ir_run"
+            run_dir.mkdir()
+            (run_dir / "run_summary.json").write_text(json.dumps({
+                "rear_ir_settings": {"right": {"id": 3, "port": 1},
+                                     "left": {"id": 4, "port": 1}, "active_io": 0},
+                "rear_ir_recoveries": [{"side": "right", "status": "cleared",
+                                        "elapsed_s": 0.25, "distance_m": 0.04,
+                                        "reason": None}],
+            }), encoding="utf-8")
+            write_csv(run_dir / "adapter.csv", ["io_5", "io_7"], [
+                [1, 0.0, 1, 1], [2, 0.1, 0, 1], [3, 0.2, 0, 0],
+                [4, 0.3, 0, 0], [5, 0.4, 1, 1], [6, 0.5, 0, 1],
+            ])
+            issues = RunStore(temp).load_run("ir_run")["issues"]
+            messages = [issue["message"] for issue in issues]
+            self.assertEqual(messages.count("Rear IR right detected (IO 0)"), 2)
+            self.assertEqual(messages.count("Rear IR left detected (IO 0)"), 1)
+            self.assertIn("Rear IR right recovery cleared (0.040 m)", messages)
+
+    def test_rear_ir_review_uses_each_sides_polarity(self):
+        with tempfile.TemporaryDirectory() as temp:
+            run_dir = Path(temp) / "mixed_ir"
+            run_dir.mkdir()
+            (run_dir / "run_summary.json").write_text(json.dumps({
+                "rear_ir_settings": {
+                    "right": {"id": 3, "port": 1, "active_io": 1},
+                    "left": {"id": 4, "port": 1, "active_io": 0},
+                },
+            }), encoding="utf-8")
+            write_csv(run_dir / "adapter.csv", ["io_5", "io_7"], [
+                [1, 0.0, 0, 1], [2, 0.1, 1, 0], [3, 0.2, 1, 0],
+            ])
+            messages = [issue["message"] for issue in RunStore(temp).load_run("mixed_ir")["issues"]]
+            self.assertEqual(messages.count("Rear IR right detected (IO 1)"), 1)
+            self.assertEqual(messages.count("Rear IR left detected (IO 0)"), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

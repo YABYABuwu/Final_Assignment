@@ -370,9 +370,9 @@ class ExplorationTests(unittest.TestCase):
                         disable_timeout=False, stop_if=None, pause_if=None):
                 new_scans = self.gimbal.commands[self.previous_scan_count:]
                 if not self.commands:
-                    self_test.assertEqual([round(command[1]) for command in new_scans[:4]],
+                    self_test.assertEqual([round(command[1]) for command in new_scans[1:5]],
                                           [0, -90, -180, 90])
-                    self_test.assertEqual(len(new_scans), 6)
+                    self_test.assertEqual(len(new_scans), 7)  # Recenter + six scans.
                 else:
                     self_test.assertEqual(len(new_scans), 1)
                 self.previous_scan_count = len(self.gimbal.commands)
@@ -598,7 +598,8 @@ class ExplorationTests(unittest.TestCase):
             result = explorer.run(FakeSlamWorker())
 
         self.assertEqual(result["status"], "no_safe_direction")
-        self.assertEqual(len(gimbal.commands), 4)
+        self.assertEqual(len(gimbal.commands), 5)  # Recenter + four directions.
+        self.assertEqual(gimbal.recenter_calls, 1)
         self.assertFalse(result["alignment_enabled"])
         self.assertEqual(result["alignments"], {})
         self.assertEqual(chassis.commands, [])
@@ -697,6 +698,34 @@ class ExplorationTests(unittest.TestCase):
         self.assertAlmostEqual(result["center_distance_m"], .185)
         self.assertEqual(result["center_cell"], [1, 0])
         self.assertAlmostEqual(explorer.cell_targets[(1, 0)][0], .45)
+        self.assertEqual(explorer.current_cell, (1, 0))
+
+    def test_grid_motion_accepts_measured_pitch_offset_within_calibrated_tolerance(self):
+        class OffsetPitchChassis(SimulatedChassis):
+            def move_to(self, x, y, yaw=None, stop_if=None, **kwargs):
+                pose = (x, y, yaw or 0.0)
+                self.commands.append(pose)
+                timestamp = max(time.time(), self.slam_map.latest_scan_timestamp or 0) + .01
+                self.slam_map.update(pose, 2000, timestamp=timestamp,
+                                     gimbal_yaw_deg=self.gimbal.yaw)
+                self.logger.set("tof", (2000,), timestamp)
+                self.logger.set("gimbal", (7.1, self.gimbal.yaw, 0, self.gimbal.yaw),
+                                timestamp)
+                if stop_if is not None and stop_if(pose):
+                    raise AssertionError("safe pitch offset incorrectly stopped grid motion")
+                return pose
+
+        slam_map = self.make_map()
+        logger = FakeLogger()
+        logger.set("attitude", (0, 0, 0))
+        gimbal = SimulatedGimbal(slam_map, logger, 2000)
+        chassis = OffsetPitchChassis(slam_map, logger, gimbal, 2000)
+        explorer = DFSExplorer(chassis, gimbal, logger, slam_map, self.settings)
+        explorer.base_pose = (0, 0, 0)
+        explorer.slam_worker = FakeSlamWorker()
+        explorer.cell_targets[(0, 0)] = (0, 0)
+
+        self.assertTrue(explorer._move((1, 0)))
         self.assertEqual(explorer.current_cell, (1, 0))
 
     def test_grid_emergency_stop_before_midpoint_keeps_source_cell(self):
@@ -865,6 +894,125 @@ class ExplorationTests(unittest.TestCase):
 
         self.assertEqual(explorer._scan_for_direction((1, 0))[0], 2000)
 
+    def test_scan_accepts_observed_pitch_offset_without_relaxing_yaw(self):
+        class OffsetPitchGimbal(SimulatedGimbal):
+            def moveto(self, pitch, yaw, pitch_speed, yaw_speed):
+                action = super().moveto(pitch, yaw, pitch_speed, yaw_speed)
+                self.logger.set("gimbal", (7.1, self.yaw, 0, self.yaw),
+                                self.scan_time + .001)
+                return action
+
+        slam_map = OccupancyGridSLAM(self.settings)
+        slam_map.update((0, 0, 0), 2000)
+        logger = FakeLogger()
+        logger.set("attitude", (0, 0, 0))
+        gimbal = OffsetPitchGimbal(slam_map, logger, 2000)
+        explorer = DFSExplorer(None, gimbal, logger, slam_map, self.settings)
+        explorer.base_pose = (0, 0, 0)
+        explorer.slam_worker = FakeSlamWorker()
+
+        self.assertEqual(explorer._scan_for_direction((1, 0))[0], 2000)
+        self.assertEqual(self.settings["gimbal"]["angle_tolerance_deg"], 3)
+        self.assertEqual(self.settings["gimbal"]["pitch_tolerance_deg"], 8)
+
+    def test_completed_gimbal_action_retries_once_when_yaw_is_stuck(self):
+        class FreshGimbalLogger(FakeLogger):
+            def get_sample(self, name, max_age_s=None):
+                sample = super().get_sample(name, max_age_s)
+                return ((sample[0], time.time()) if name == "gimbal" and sample else sample)
+
+        class CompletedAction:
+            has_succeeded = True
+            state = "action_succeeded"
+
+            def wait_for_completed(self):
+                return True
+
+        class StalledOnceGimbal(SimulatedGimbal):
+            def moveto(self, pitch, yaw, pitch_speed, yaw_speed):
+                super().moveto(pitch, yaw, pitch_speed, yaw_speed)
+                if len(self.commands) == 1:
+                    self.yaw = -28.6
+                    self.logger.set("gimbal", (pitch, self.yaw, pitch, self.yaw))
+                return CompletedAction()
+
+        slam_map = OccupancyGridSLAM(self.settings)
+        slam_map.update((0, 0, 0), 2000)
+        logger = FreshGimbalLogger()
+        logger.set("attitude", (0, 0, 0))
+        gimbal = StalledOnceGimbal(slam_map, logger, 2000)
+        explorer = DFSExplorer(None, gimbal, logger, slam_map, self.settings)
+        explorer.base_pose = (0, 0, 0)
+        explorer.slam_worker = FakeSlamWorker()
+
+        self.assertEqual(explorer._scan_for_direction((0, -1))[0], 2000)
+        self.assertEqual(len(gimbal.commands), 2)
+
+    def test_completed_gimbal_action_stops_after_failed_retry(self):
+        class FreshGimbalLogger(FakeLogger):
+            def get_sample(self, name, max_age_s=None):
+                sample = super().get_sample(name, max_age_s)
+                return ((sample[0], time.time()) if name == "gimbal" and sample else sample)
+
+        class CompletedAction:
+            has_succeeded = True
+            state = "action_succeeded"
+
+            def wait_for_completed(self):
+                return True
+
+        class StuckGimbal(SimulatedGimbal):
+            def moveto(self, pitch, yaw, pitch_speed, yaw_speed):
+                super().moveto(pitch, yaw, pitch_speed, yaw_speed)
+                self.yaw = -28.6
+                self.logger.set("gimbal", (pitch, self.yaw, pitch, self.yaw))
+                return CompletedAction()
+
+        slam_map = OccupancyGridSLAM(self.settings)
+        slam_map.update((0, 0, 0), 2000)
+        logger = FreshGimbalLogger()
+        logger.set("attitude", (0, 0, 0))
+        gimbal = StuckGimbal(slam_map, logger, 2000)
+        explorer = DFSExplorer(None, gimbal, logger, slam_map, self.settings)
+        explorer.base_pose = (0, 0, 0)
+        explorer.slam_worker = FakeSlamWorker()
+
+        with self.assertRaisesRegex(MissionStop, "gimbal alignment failed after retry"):
+            explorer._scan_for_direction((0, -1))
+        self.assertEqual(len(gimbal.commands), 2)
+
+    def test_completed_gimbal_action_retries_when_pitch_is_stuck(self):
+        class FreshGimbalLogger(FakeLogger):
+            def get_sample(self, name, max_age_s=None):
+                sample = super().get_sample(name, max_age_s)
+                return ((sample[0], time.time()) if name == "gimbal" and sample else sample)
+
+        class CompletedAction:
+            has_succeeded = True
+            state = "action_succeeded"
+
+            def wait_for_completed(self):
+                return True
+
+        class StalledPitchOnceGimbal(SimulatedGimbal):
+            def moveto(self, pitch, yaw, pitch_speed, yaw_speed):
+                super().moveto(pitch, yaw, pitch_speed, yaw_speed)
+                if len(self.commands) == 1:
+                    self.logger.set("gimbal", (-9, self.yaw, -9, self.yaw))
+                return CompletedAction()
+
+        slam_map = OccupancyGridSLAM(self.settings)
+        slam_map.update((0, 0, 0), 2000)
+        logger = FreshGimbalLogger()
+        logger.set("attitude", (0, 0, 0))
+        gimbal = StalledPitchOnceGimbal(slam_map, logger, 2000)
+        explorer = DFSExplorer(None, gimbal, logger, slam_map, self.settings)
+        explorer.base_pose = (0, 0, 0)
+        explorer.slam_worker = FakeSlamWorker()
+
+        self.assertEqual(explorer._scan_for_direction((1, 0))[0], 2000)
+        self.assertEqual(len(gimbal.commands), 2)
+
     def test_gimbal_scan_waits_for_sdk_action_before_next_command(self):
         class PendingAction:
             def __init__(self):
@@ -973,6 +1121,17 @@ class ExplorationTests(unittest.TestCase):
         self.assertEqual(action._coordinate, COORDINATE_CAR)
         self.assertEqual(action.encode()._coordinate, COORDINATE_CAR)
 
+    def test_dfs_gimbal_recenter_delegates_to_sdk(self):
+        calls = []
+        sdk_gimbal = SimpleNamespace(
+            recenter=lambda **kwargs: calls.append(kwargs) or "recenter-action")
+
+        result = ChassisRelativeGimbal(sdk_gimbal).recenter(
+            pitch_speed=40, yaw_speed=50)
+
+        self.assertEqual(result, "recenter-action")
+        self.assertEqual(calls, [{"pitch_speed": 40, "yaw_speed": 50}])
+
     def test_dfs_explores_and_backtracks_inside_a_simulated_room(self):
         range_provider = lambda pose, yaw: self.room_range(pose, yaw, half_extent=2.0)
         slam_map = OccupancyGridSLAM(self.settings)
@@ -1010,7 +1169,7 @@ class ExplorationTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "node_limit_returned")
         self.assertEqual(result["moves"], 2)
-        self.assertEqual(len(gimbal.commands), 7)  # Four directions, forward checks, one return monitor.
+        self.assertEqual(len(gimbal.commands), 8)  # Recenter, four directions, checks and return monitor.
         self.assertEqual(explorer.scanned_cells, {(0, 0)})
 
     def test_revisiting_scanned_cell_reuses_four_recorded_sides(self):

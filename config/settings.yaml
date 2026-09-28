@@ -33,7 +33,7 @@ logging:
     esc:      {enabled: false, save: false, frequency_hz: 10}
     status:   {enabled: true, save: true, frequency_hz: 5}
     tof:      {enabled: true, save: true, frequency_hz: 20}
-    adapter:  {enabled: false, save: false, frequency_hz: 10}
+    adapter:  {enabled: true, save: true, frequency_hz: 20} # IR กันชนหลัง; IO/ADC จาก sensor adaptor
     battery:  {enabled: true, save: true, frequency_hz: 5}
     gimbal:   {enabled: true, save: true, frequency_hz: 10}
 
@@ -50,6 +50,16 @@ review:
   port: 8001               # URL: http://127.0.0.1:8001
   max_points_per_stream: 10000 # จำกัดจุดที่ส่งให้เบราว์เซอร์ต่อ CSV; ไฟล์จริงยังครบ
   close_tof_mm: 200        # แจ้งเหตุการณ์เมื่อ ToF ช่อง 0 ต่ำกว่าระยะนี้ (mm)
+
+rear_ir:
+  enabled: true
+  right: {id: 3, port: 2, active_io: 0} # ขวา: io_6; ไฟดับ/ไม่พบวัตถุเป็น IO=0
+  left: {id: 4, port: 1, active_io: 0}  # ซ้าย: polarity กลับด้านจากขวาตามการทดสอบล่าสุด
+  max_age_s: 0.5          # ข้อมูลเก่ากว่านี้หยุดการถอย/สไลด์/หมุนจนได้ค่าใหม่
+  recovery_speed_m_s: 0.08 # ครั้ง 1 หลบข้าง, ครั้ง 2 หน้า, ครั้ง 3 ทแยง; ทั้งคู่ไปหน้า
+  recovery_max_m: 0.12    # ระยะหลบสูงสุดต่อหนึ่งครั้ง
+  recovery_max_attempts: 3 # ตรวจซ้ำแล้วยังติด ให้ลองหลบได้สูงสุด 3 ครั้งต่อ move_to
+  recovery_clear_samples: 3 # ต้องเห็น IO ว่างจาก callback ใหม่ต่อเนื่องก่อนเดินต่อ
 
 mission:
   enabled: false          # เริ่มจาก false เพื่อไม่ให้รถวิ่งทันทีเมื่อทดสอบการเชื่อมต่อ
@@ -88,9 +98,12 @@ exploration:
     pivot_y_m: 0.0
     yaw_offset_deg: 0.0    # มุมคลาดระหว่างแนวเลนส์กับแนวหน้า gimbal
   gimbal:
+    auto_recenter: true     # ตั้งศูนย์กายภาพอัตโนมัติหนึ่งครั้งก่อนเริ่ม DFS
+    recenter_speed_deg_s: 60
     pitch_deg: 0.0          # มุมหัวเทียบตัวรถ; ไม่ชดเชย pitch ของ chassis
     yaw_speed_deg_s: 120
-    angle_tolerance_deg: 3
+    angle_tolerance_deg: 3 # tolerance ของ yaw
+    pitch_tolerance_deg: 8 # telemetry เปลี่ยนตาม yaw สูงสุดราว 7.1°; yaw ยังใช้ tolerance 3°
   map:
     resolution_m: 0.05
     width_m: 8.0
