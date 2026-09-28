@@ -9,6 +9,7 @@ from src.dashboard import Dashboard
 from src.explorer import DFSExplorer
 from src.gimbal_control import ChassisRelativeGimbal
 from src.logger import SensorLogger
+from src.mission_stop import MissionStop
 from src.slam import OccupancyGridSLAM, SlamWorker
 
 
@@ -61,6 +62,8 @@ def main():
                 motion_settings["max_speed_m_s"], exploration_settings["max_speed_m_s"]
             )
             motion_settings["heading_source"] = exploration_settings["heading_source"]
+        logger.motion_settings = {"max_speed_m_s": motion_settings["max_speed_m_s"],
+                                  "max_lateral_accel_m_s2": motion_settings["max_lateral_accel_m_s2"]}
         chassis = ChassisController(ep_robot, logger, motion_settings)
         if exploration_settings["enabled"]:
             slam_worker = SlamWorker(logger, slam_map, exploration_settings)
@@ -71,7 +74,7 @@ def main():
         if config["dashboard"]["enabled"]:
             dashboard = Dashboard(ep_robot, logger, config["dashboard"],
                                   slam_map=slam_map, slam_worker=slam_worker,
-                                  explorer=explorer)
+                                  explorer=explorer, motion_settings=logger.motion_settings)
             dashboard.start()
             host = config["dashboard"]["host"]
             port = config["dashboard"]["port"]
@@ -119,12 +122,19 @@ def main():
             print("Dashboard is open. Press Ctrl+C to stop.")
             while True:
                 if dashboard.camera_error is not None:
-                    raise RuntimeError(f"camera error: {dashboard.camera_error}")
+                    raise MissionStop(f"camera error: {dashboard.camera_error}")
                 time.sleep(0.5)
     except KeyboardInterrupt:
         print("Stopped by user")
         if logger is not None and logger.run_status == "running":
             logger.run_status = "interrupted"
+    except MissionStop as error:
+        print(f"Mission stopped: {error}")
+        if logger is not None:
+            logger.run_status = "stopped"
+            logger.run_error = str(error)
+        if dashboard is not None:
+            dashboard.mission_status = f"Stopped: {error}"
     except Exception as error:
         if logger is not None:
             logger.run_status = "failed"

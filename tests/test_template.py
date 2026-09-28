@@ -47,11 +47,12 @@ class TemplateTests(unittest.TestCase):
         self.assertEqual(pid.compute(-2, 0.1), -0.3)
         self.assertEqual(angle_error(-179, 179), 2)
         self.assertTrue(config["dashboard"]["enabled"])
+        self.assertEqual(config["motion"]["max_lateral_accel_m_s2"], .30)
         self.assertEqual(config["exploration"]["sensor"]["tof_channel"], 0)
         self.assertGreater(config["exploration"]["wall_threshold_mm"], 0)
         self.assertEqual(config["exploration"]["tof_median_window"], 3)
         self.assertIsInstance(config["exploration"]["alignment"]["enabled"], bool)
-        self.assertEqual(config["exploration"]["alignment"]["emergency_stop_distance_m"], .20)
+        self.assertEqual(config["exploration"]["emergency_stop_distance_m"], .20)
         self.assertNotIn("min_range_m", config["exploration"]["map"])
         self.assertNotIn("max_range_m", config["exploration"]["map"])
 
@@ -110,7 +111,7 @@ class TemplateTests(unittest.TestCase):
             calls.append(options)
             if len(calls) == 1:
                 return object()
-            raise RuntimeError("camera disconnected")
+            raise OSError("camera disconnected")
 
         fake_cv2 = SimpleNamespace(
             IMWRITE_JPEG_QUALITY=1,
@@ -219,12 +220,39 @@ class TemplateTests(unittest.TestCase):
             motion = load_config()["motion"]
             chassis = ChassisController(robot, logger, motion)
             with self.assertRaises(TimeoutError):
-                chassis.move_to(1, 0)
+                chassis.move_to(1, 0, timeout_s=0.02)
             self.assertEqual(module.commands[-1], {"x": 0, "y": 0, "z": 0})
             module.callbacks["position"]((1, 0, 0))
             module.callbacks["attitude"]((0, 0, 0))
             self.assertEqual(chassis.move_to(1, 0, yaw=0), (1, 0, 0))
             logger.stop()
+
+    def test_move_to_pauses_for_missing_pose_and_resumes(self):
+        module = FakeModule()
+        motion = load_config()["motion"]
+        motion["control_period_s"] = 0.001
+        chassis = ChassisController(SimpleNamespace(chassis=module), None, motion)
+        poses = iter([None, None, (1, 0, 0)])
+        chassis.get_pose = lambda: next(poses, (1, 0, 0))
+
+        self.assertEqual(chassis.move_to(1, 0, yaw=0, disable_timeout=True), (1, 0, 0))
+        self.assertGreaterEqual(len(module.commands), 3)
+        self.assertTrue(all(command == {"x": 0, "y": 0, "z": 0}
+                            for command in module.commands))
+
+    def test_move_to_pauses_when_slam_telemetry_is_unsynchronized(self):
+        module = FakeModule()
+        motion = load_config()["motion"]
+        motion["control_period_s"] = 0.001
+        chassis = ChassisController(SimpleNamespace(chassis=module), None, motion)
+        chassis.get_pose = lambda: (1, 0, 0)
+        pauses = iter([True, True, False])
+
+        pose = chassis.move_to(1, 0, yaw=0, disable_timeout=True,
+                               pause_if=lambda: next(pauses, False))
+
+        self.assertEqual(pose, (1, 0, 0))
+        self.assertEqual(module.commands[:2], [{"x": 0, "y": 0, "z": 0}] * 2)
 
     def test_move_to_sends_bounded_speed_then_times_out(self):
         module = FakeModule()
@@ -253,6 +281,40 @@ class TemplateTests(unittest.TestCase):
             self.assertLessEqual(abs(first["y"]), motion["max_speed_m_s"])
             self.assertEqual(module.commands[-1], {"x": 0, "y": 0, "z": 0})
             logger.stop()
+
+    def test_move_to_ramps_only_lateral_speed_without_delaying_the_stop(self):
+        module = FakeModule()
+        motion = load_config()["motion"]
+        motion["control_period_s"] = .01
+        motion["max_lateral_accel_m_s2"] = .5
+        chassis = ChassisController(SimpleNamespace(chassis=module), None, motion)
+        chassis.get_pose = lambda: (0, 0, 0)
+
+        with self.assertRaises(TimeoutError):
+            chassis.move_to(1, 1, yaw=0, timeout_s=.08)
+
+        moving = [command for command in module.commands if command["x"] or command["y"]]
+        self.assertGreater(len(moving), 3)
+        self.assertGreater(moving[0]["x"], .2)
+        self.assertLess(abs(moving[0]["y"]), .01)
+        self.assertGreater(abs(moving[-1]["y"]), abs(moving[0]["y"]))
+        for old, new in zip(moving, moving[1:]):
+            step = abs(new["y"] - old["y"])
+            self.assertLessEqual(step, motion["max_lateral_accel_m_s2"] * motion["control_period_s"] + 1e-6)
+        self.assertEqual(module.commands[-1], {"x": 0, "y": 0, "z": 0})
+
+    def test_forward_and_backward_speed_are_not_ramped(self):
+        motion = load_config()["motion"]
+        motion["control_period_s"] = .001
+        for destination, expected in ((1, motion["max_speed_m_s"]),
+                                      (-1, -motion["max_speed_m_s"])):
+            module = FakeModule()
+            chassis = ChassisController(SimpleNamespace(chassis=module), None, motion)
+            chassis.get_pose = lambda: (0, 0, 0)
+            with self.assertRaises(TimeoutError):
+                chassis.move_to(destination, 0, yaw=0, timeout_s=.01)
+            self.assertAlmostEqual(module.commands[0]["x"], expected)
+            self.assertEqual(module.commands[0]["y"], 0)
 
     def test_move_to_corrects_heading_drift_without_new_turn_target(self):
         module = FakeModule()

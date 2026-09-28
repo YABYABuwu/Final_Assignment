@@ -9,11 +9,12 @@ motion:
   sample_timeout_s: 1.0       # หาก position/attitude เก่ากว่านี้ ให้หยุด
   control_period_s: 0.1       # ระยะเวลาระหว่างคำสั่งความเร็ว
   max_speed_m_s: 0.4         # เพดานความเร็วรวมของแกน x/y
+  max_lateral_accel_m_s2: 0.30 # จำกัดการเร่งเฉพาะสไลด์ซ้าย/ขวา; เดินหน้า/ถอยหลังใช้ PID ตามเดิม
   max_turn_deg_s: 45          # เพดานความเร็วหมุน
   hold_heading: true          # yaw: null = รักษามุมเดิมข้าม waypoint ไม่ให้ drift สะสม
   pid:
-    x: {kp: 0.9, ki: 0.1, kd: 0.01}    # ควบคุมตำแหน่งแกน x
-    y: {kp: 0.9, ki: 0.1, kd: 0.01}    # ควบคุมตำแหน่งแกน y
+    x: {kp: 1, ki: 0.4, kd: 0.05}    # ควบคุมตำแหน่งแกน x
+    y: {kp: 1, ki: 0.4, kd: 0.05}    # ควบคุมตำแหน่งแกน y
     yaw: {kp: 1.2, ki: 0.1, kd: 0.01}  # ควบคุมมุมตัวรถ
 
 logging:
@@ -33,8 +34,8 @@ logging:
     status:   {enabled: true, save: true, frequency_hz: 5}
     tof:      {enabled: true, save: true, frequency_hz: 20}
     adapter:  {enabled: false, save: false, frequency_hz: 10}
-    battery:  {enabled: true, save: true, frequency_hz: 1}
-    gimbal:   {enabled: true, save: true, frequency_hz: 5}
+    battery:  {enabled: true, save: true, frequency_hz: 5}
+    gimbal:   {enabled: true, save: true, frequency_hz: 10}
 
 dashboard:
   enabled: true           # true = เปิดหน้าเว็บและกล้องพร้อมกับโปรแกรม
@@ -66,15 +67,15 @@ exploration:
   position_coordinate_system: 1 # ผูกแผนที่กับพิกัดตั้งแต่เปิดหุ่นยนต์ เพื่อให้โหลดแผนที่เดิมได้ในรอบเปิดเครื่องเดียวกัน
   step_m: 0.60            # ขนาดช่องกริดกำแพง และระยะเดินระหว่างศูนย์กลางช่อง
   max_speed_m_s: 0.20     # จำกัดความเร็วขณะสำรวจแยกจาก mission waypoint
-  heading_source: gimbal  # จับ yaw สดก่อนเดินแต่ละช่วง แล้ว PID รักษาค่านั้น; attitude = ใช้ yaw chassis อย่างเดียว
+  heading_source: attitude # ใช้ yaw chassis สำหรับ PID และทิศสแกน; gimbal ground-relative มีความคลาดสะสมใน log 20260927
   wall_threshold_mm: 500 # ToF <= ค่านี้เป็นกำแพง; มากกว่านี้เป็นทางเปิด
   tof_median_window: 3   # ใช้ scan ใหม่ 3 ครั้งหลัง gimbal หยุด แล้วเลือกค่ากลางก่อนตัดสินใจ DFS
+  emergency_stop_distance_m: 0.20 # ระยะกึ่งกลาง chassis ถึงกำแพงที่หยุดระหว่างเดินตามกริด
   alignment:
     enabled: true         # จัดตำแหน่งจากกำแพงที่เลือกหลังสแกนครบ 4 ทิศ
-    wall_distance_m: 0.25 # ระยะเป้าหมายจากกึ่งกลาง chassis ถึงกำแพงที่เลือก
-    emergency_stop_distance_m: 0.20 # ระยะกึ่งกลาง chassis ถึงกำแพง <= 20 ซม. ให้หยุดและใช้ตำแหน่งนั้นเป็นกลางช่อง
+    wall_distance_m: 0.20 # เป้าหมายเมื่อมีผนังฝั่งเดียว; สองฝั่งให้ระยะเท่ากัน
     tolerance_m: 0.03     # ไม่ขยับถ้าคลาดไม่เกิน 3 ซม.
-    max_shift_m: 0.10     # หยุดเมื่อการจัดตำแหน่งต้องขยับเกินค่านี้
+    max_shift_m: 0.10     # ระยะขยับสูงสุดต่อช่วง; วัดผนังใหม่ก่อนขยับช่วงถัดไป
   max_nodes: 120           # จำกัดจำนวนช่องที่ DFS จะเข้าเยี่ยมต่อรอบ
   update_hz: 5
   max_sample_age_s: 1.0 # อายุสูงสุดของข้อมูลที่ใช้ตัดสินใจ; ไม่ใช่เวลารองาน
@@ -88,7 +89,7 @@ exploration:
     yaw_offset_deg: 0.0    # มุมคลาดระหว่างแนวเลนส์กับแนวหน้า gimbal
   gimbal:
     pitch_deg: 0.0          # มุมหัวเทียบตัวรถ; ไม่ชดเชย pitch ของ chassis
-    yaw_speed_deg_s: 60
+    yaw_speed_deg_s: 120
     angle_tolerance_deg: 3
   map:
     resolution_m: 0.05

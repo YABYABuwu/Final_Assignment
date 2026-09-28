@@ -51,9 +51,10 @@ def load_config(path=DEFAULT_CONFIG):
     if not isinstance(motion.get("hold_heading"), bool):
         raise ValueError("motion.hold_heading must be true or false")
     for name in ("position_tolerance_m", "angle_tolerance_deg", "timeout_s",
-                 "sample_timeout_s", "control_period_s", "max_speed_m_s",
+                 "sample_timeout_s", "control_period_s", "max_speed_m_s", "max_lateral_accel_m_s2",
                  "max_turn_deg_s"):
-        if not isinstance(motion.get(name), (int, float)) or motion[name] <= 0:
+        if (not isinstance(motion.get(name), (int, float)) or
+                not math.isfinite(motion[name]) or motion[name] <= 0):
             raise ValueError(f"motion.{name} must be a positive number")
 
     streams = config["logging"].get("streams")
@@ -115,8 +116,7 @@ def load_config(path=DEFAULT_CONFIG):
         raise ValueError("exploration.alignment must be a mapping")
     if not isinstance(alignment.get("enabled"), bool):
         raise ValueError("exploration.alignment.enabled must be true or false")
-    for name in ("wall_distance_m", "tolerance_m", "max_shift_m",
-                 "emergency_stop_distance_m"):
+    for name in ("wall_distance_m", "tolerance_m", "max_shift_m"):
         value = alignment.get(name)
         if not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
             raise ValueError(f"exploration.alignment.{name} must be a positive number")
@@ -124,6 +124,10 @@ def load_config(path=DEFAULT_CONFIG):
         raise ValueError("exploration.alignment.tolerance_m must be below wall_distance_m")
     if alignment["max_shift_m"] >= exploration["step_m"] / 2:
         raise ValueError("exploration.alignment.max_shift_m must be below half a grid step")
+    emergency_distance = exploration.get("emergency_stop_distance_m")
+    if (type(emergency_distance) not in (int, float) or
+            not math.isfinite(emergency_distance) or emergency_distance <= 0):
+        raise ValueError("exploration.emergency_stop_distance_m must be a positive number")
     max_nodes = exploration.get("max_nodes")
     if type(max_nodes) is not int or not 1 <= max_nodes <= 10000:
         raise ValueError("exploration.max_nodes must be an integer from 1 to 10000")

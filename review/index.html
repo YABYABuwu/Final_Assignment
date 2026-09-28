@@ -349,7 +349,7 @@
       selectedRevision = knownRuns.find(item => item.name === name)?.revision ?? null;
       const status = run.summary.status || "ไม่มีสรุป";
       const statusElement = document.getElementById("run-status"); statusElement.textContent = status;
-      statusElement.className = status === "completed" ? "good" : status === "failed" ? "bad" : "warn";
+      statusElement.className = status === "completed" ? "good" : ["failed", "stopped"].includes(status) ? "bad" : "warn";
       document.getElementById("duration").textContent = `${format(run.duration_s)} s`;
       document.getElementById("stream-count").textContent = Object.keys(run.streams).length;
       document.getElementById("dropped").textContent = run.summary.dropped_csv_rows ?? "—";
@@ -363,6 +363,11 @@
           wallPanel.append(note);
         }
         const scanned=run.summary.exploration?.scanned_cells;
+        if (run.summary.motion_settings?.max_lateral_accel_m_s2 != null) {
+          const note=document.createElement("p");
+          note.textContent=`ความเร็วเลื่อนสูงสุด ${run.summary.motion_settings.max_speed_m_s.toFixed(2)} m/s · อัตราเร่งสไลด์ซ้าย/ขวาสูงสุด ${run.summary.motion_settings.max_lateral_accel_m_s2.toFixed(2)} m/s²`;
+          wallPanel.append(note);
+        }
         if (run.summary.exploration?.gimbal_pitch_frame === "chassis") {
           const note=document.createElement("p");
           note.textContent="หัวสแกนรักษา pitch เทียบตัวรถ ไม่ชดเชย pitch ของ chassis";
@@ -385,6 +390,12 @@
           wallPanel.append(note);
         }
         const alignments=run.summary.exploration?.alignments;
+        const emergencyLimit=run.summary.exploration?.emergency_stop_distance_m;
+        if (emergencyLimit != null) {
+          const note=document.createElement("p");
+          note.textContent=`ระหว่างเดิน หยุดฉุกเฉินเมื่อระยะกึ่งกลางรถถึงกำแพง ≤${(emergencyLimit*100).toFixed(0)} ซม.`;
+          wallPanel.append(note);
+        }
         if (run.summary.exploration?.alignment_enabled === false) {
           const note=document.createElement("p"); note.textContent="จัดกลางช่อง: ปิด"; wallPanel.append(note);
         }
@@ -393,11 +404,26 @@
           note.textContent="จัดกลางช่องจากระยะกึ่งกลางรถถึงกำแพง: "+Object.entries(alignments).map(([cell,result])=>{
             const distances=Object.entries(result.after_m || result.walls || {})
               .map(([side,distance])=>`${side} ${(distance*100).toFixed(1)} ซม.`).join(", ");
+            const modes=Object.values(result.axis_modes || {});
+            const method=modes.includes("between_walls")
+              ? `สองฝั่งให้เท่ากัน${modes.includes("single_wall") ? `; ฝั่งเดียวเป้าหมาย ${(result.target_distance_m*100).toFixed(0)} ซม.` : ""}`
+              : `เป้าหมาย ${(result.target_distance_m*100).toFixed(0)} ซม.`;
             const status=result.status === "emergency_stop_centered"
               ? `หยุดฉุกเฉินที่ ${(result.emergency_center_distance_m*100).toFixed(1)} ซม. และถือเป็นกลางช่อง`
-              : result.status === "moved" ? "ขยับแล้ว" : result.status === "no_wall" ? "ไม่พบกำแพง" : "อยู่ในเกณฑ์";
-            return `${cell} ${status}${distances ? ` (${distances}; ใช้ ${result.selected_sides?.join(", ") || "—"})` : ""}`;
+              : result.status === "moved" ? `ขยับแล้ว ${result.steps ?? 1} ช่วง`
+              : result.status === "stalled" ? `ปรับแล้วระยะไม่ดีขึ้น: ${result.reason}`
+              : result.status?.startsWith("skipped_") ? `ข้ามการจัดกลางช่อง: ${result.reason}`
+              : result.status === "no_wall" ? "ไม่พบกำแพง" : "อยู่ในเกณฑ์";
+            return `${cell} ${status}${distances ? ` (${distances}; ใช้ ${result.selected_sides?.join(", ") || "—"}; ${method})` : ""}`;
           }).join(" · ");
+          wallPanel.append(note);
+        }
+        const motionStop=run.summary.exploration?.last_motion_stop;
+        if (motionStop?.center_distance_m != null) {
+          const note=document.createElement("p");
+          note.textContent=`${motionStop.status === "emergency_stop_centered" ? "หยุดฉุกเฉินระหว่างเดิน" : "ทางถูกปิดก่อนเดิน"}: `+
+            `ช่อง ${motionStop.center_cell?.join(",") || "—"}, ระยะ ${(motionStop.center_distance_m*100).toFixed(1)} ซม., `+
+            `ตำแหน่งจริง X ${motionStop.actual_pose?.[0]?.toFixed(3) ?? "—"} ม. / Y ${motionStop.actual_pose?.[1]?.toFixed(3) ?? "—"} ม.`;
           wallPanel.append(note);
         }
         const table=document.createElement("table"); table.style.width="100%";

@@ -8,19 +8,22 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from src.logger import STREAMS
+from src.mission_stop import MissionStop
 
 
 PAGE = Path(__file__).resolve().parent.parent / "dashboard" / "index.html"
 
 
 class Dashboard:
-    def __init__(self, robot, logger, settings, slam_map=None, slam_worker=None, explorer=None):
+    def __init__(self, robot, logger, settings, slam_map=None, slam_worker=None,
+                 explorer=None, motion_settings=None):
         self.camera = robot.camera
         self.logger = logger
         self.settings = settings
         self.slam_map = slam_map
         self.slam_worker = slam_worker
         self.explorer = explorer
+        self.motion_settings = motion_settings
         self.running = threading.Event()
         self.frame_changed = threading.Condition()
         self.latest_jpeg = None
@@ -73,6 +76,7 @@ class Dashboard:
             "camera_ready": self.latest_jpeg is not None,
             "camera_error": self.camera_error,
             "mission_status": self.mission_status,
+            "motion_settings": self.motion_settings,
             "slam": self.slam_worker.status() if self.slam_worker is not None else None,
             "exploration": self.explorer.snapshot() if self.explorer is not None else None,
         }
@@ -213,7 +217,7 @@ class Dashboard:
     def start(self):
         """Start camera capture and a local web server."""
         if self.running.is_set():
-            raise RuntimeError("dashboard is already running")
+            raise MissionStop("dashboard is already running")
         import cv2  # Fail before opening the camera if OpenCV is unavailable.
 
         try:
@@ -221,7 +225,7 @@ class Dashboard:
                 display=False, resolution=self.settings["resolution"]
             )
             if result is False:
-                raise RuntimeError("could not start camera video stream")
+                raise MissionStop("could not start camera video stream")
             self.camera_started = True
             self.server = ThreadingHTTPServer(
                 (self.settings["host"], self.settings["port"]), self._handler_class()

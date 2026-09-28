@@ -6,6 +6,7 @@ import threading
 import time
 
 from src.slam import CellWallGrid, _wrap_degrees
+from src.mission_stop import MissionStop
 
 
 class DFSExplorer:
@@ -30,6 +31,7 @@ class DFSExplorer:
         self.cell_targets = {}
         self.alignments = {}
         self.last_motion_heading = None
+        self.last_motion_stop = None
         self.wall_grid = CellWallGrid(
             settings["step_m"], min(1000, math.ceil(math.hypot(
                 settings["map"]["width_m"], settings["map"]["height_m"]
@@ -56,7 +58,9 @@ class DFSExplorer:
                 "heading_source": self.settings["heading_source"],
                 "gimbal_pitch_frame": "chassis",
                 "alignment_enabled": self.settings["alignment"]["enabled"],
+                "emergency_stop_distance_m": self.settings["emergency_stop_distance_m"],
                 "last_motion_heading": self.last_motion_heading,
+                "last_motion_stop": self.last_motion_stop,
                 "tof_median_window": self.settings["tof_median_window"],
                 "cell_targets": {f"{node[0]},{node[1]}": list(point)
                                  for node, point in sorted(self.cell_targets.items())},
@@ -80,24 +84,52 @@ class DFSExplorer:
         return (x0 + u * math.cos(angle) - v * math.sin(angle),
                 y0 + u * math.sin(angle) + v * math.cos(angle))
 
+    def _wait_for_fresh(self, read):
+        """Hold the wheels while telemetry is unavailable, then resume on a fresh sample."""
+        previous_status = self.status
+        waiting = False
+        while True:
+            worker_status = self.slam_worker.status() if self.slam_worker is not None else None
+            if worker_status is not None and worker_status.get("error"):
+                raise MissionStop(worker_status["error"])
+            value = None if (worker_status or {}).get("waiting_telemetry") else read()
+            if value is not None:
+                if waiting:
+                    self._set_status(previous_status)
+                return value
+            if not waiting:
+                self._set_status("waiting_telemetry")
+                waiting = True
+            stop = getattr(self.chassis, "stop", None)
+            if callable(stop):
+                stop()
+            time.sleep(0.05)
+
     def _current_yaw(self):
         if self.settings["heading_source"] == "gimbal":
             getter = getattr(self.chassis, "get_pose", None)
             if callable(getter):
-                pose = getter()
-                if pose is None:
-                    raise TimeoutError("gimbal-derived chassis yaw is missing or stale")
-                yaw = float(pose[2])
-                if not math.isfinite(yaw):
-                    raise TimeoutError("gimbal-derived chassis yaw is invalid")
-                return yaw
-        sample = self.logger.get_sample("attitude", max_age_s=self.settings["max_sample_age_s"])
-        if sample is None:
-            raise TimeoutError("attitude data is missing or stale during exploration")
-        yaw = float(sample[0][0])
-        if not math.isfinite(yaw):
-            raise TimeoutError("attitude yaw is invalid during exploration")
-        return yaw
+                def read_gimbal_yaw():
+                    pose = getter()
+                    if pose is None:
+                        return None
+                    try:
+                        yaw = float(pose[2])
+                    except (IndexError, TypeError, ValueError):
+                        return None
+                    return yaw if math.isfinite(yaw) else None
+                return self._wait_for_fresh(read_gimbal_yaw)
+
+        def read_attitude_yaw():
+            sample = self.logger.get_sample("attitude", max_age_s=self.settings["max_sample_age_s"])
+            if sample is None:
+                return None
+            try:
+                yaw = float(sample[0][0])
+            except (IndexError, TypeError, ValueError):
+                return None
+            return yaw if math.isfinite(yaw) else None
+        return self._wait_for_fresh(read_attitude_yaw)
 
     def _drive_holding_current_yaw(self, x, y, kind, stop_if=None):
         """Capture the live chassis heading immediately before this motion."""
@@ -107,7 +139,8 @@ class DFSExplorer:
                                         "kind": kind, "source": self.settings["heading_source"]}
         self.map.set_exploration_state(self.snapshot())
         options = {"yaw": yaw, "abort_event": self.slam_worker.abort_event,
-                   "disable_timeout": True}
+                   "disable_timeout": True,
+                   "pause_if": lambda: self.slam_worker.status().get("waiting_telemetry", False)}
         if stop_if is not None:
             options["stop_if"] = stop_if
         return self.chassis.move_to(x, y, **options)
@@ -115,10 +148,15 @@ class DFSExplorer:
     def _motion_pose(self):
         """Read the chassis frame used by move_to, rather than scan-matched pose."""
         getter = getattr(self.chassis, "get_pose", None)
-        pose = getter() if callable(getter) else self.map.pose
-        if pose is None or len(pose) < 2 or not all(math.isfinite(v) for v in pose[:2]):
-            raise TimeoutError("position data is missing or stale during alignment")
-        return pose
+        def read_pose():
+            pose = getter() if callable(getter) else self.map.pose
+            if pose is None or len(pose) < 2:
+                return None
+            try:
+                return pose if all(math.isfinite(float(v)) for v in pose[:2]) else None
+            except (TypeError, ValueError):
+                return None
+        return self._wait_for_fresh(read_pose)
 
     def _sensor_offset(self, world_yaw):
         direction = math.radians(world_yaw)
@@ -130,17 +168,19 @@ class DFSExplorer:
                 math.cos(math.radians(sensor["offset_yaw_deg"])))
 
     def _gimbal_sample(self):
-        sample = self.logger.get_sample("gimbal", max_age_s=self.settings["max_sample_age_s"])
-        if sample is None or len(sample[0]) < 4:
-            raise TimeoutError("gimbal angle data is missing or stale during exploration")
-        try:
-            yaw, chassis_pitch = float(sample[0][1]), float(sample[0][0])
-        except (TypeError, ValueError) as error:
-            raise TimeoutError("gimbal angle data is invalid during exploration") from error
-        if not math.isfinite(yaw) or not math.isfinite(chassis_pitch):
-            raise TimeoutError("gimbal angle data is invalid during exploration")
-        # The DFS action uses COORDINATE_CAR for both axes.
-        return yaw, chassis_pitch, float(sample[1])
+        def read_gimbal():
+            sample = self.logger.get_sample("gimbal", max_age_s=self.settings["max_sample_age_s"])
+            if sample is None or len(sample[0]) < 4:
+                return None
+            try:
+                yaw, chassis_pitch = float(sample[0][1]), float(sample[0][0])
+            except (TypeError, ValueError):
+                return None
+            if not math.isfinite(yaw) or not math.isfinite(chassis_pitch):
+                return None
+            # The DFS action uses COORDINATE_CAR for both axes.
+            return yaw, chassis_pitch, float(sample[1])
+        return self._wait_for_fresh(read_gimbal)
 
     @staticmethod
     def _command_yaw(target_relative_yaw, current_relative_yaw):
@@ -149,14 +189,14 @@ class DFSExplorer:
                       target_relative_yaw + 360.0)
         reachable = [angle for angle in candidates if -250.0 <= angle <= 250.0]
         if not reachable:
-            raise RuntimeError("gimbal cannot reach the requested direction within its yaw limits")
+            raise MissionStop("gimbal cannot reach the requested direction within its yaw limits")
         return min(reachable, key=lambda angle: abs(angle - current_relative_yaw))
 
     def _scan_for_direction(self, delta):
         """Point the single ToF toward a candidate cell and wait for its new scan."""
         worker_status = self.slam_worker.status() if self.slam_worker is not None else None
         if worker_status is not None and worker_status["error"]:
-            raise RuntimeError(worker_status["error"])
+            raise MissionStop(worker_status["error"])
         world_yaw = self.base_pose[2] + math.degrees(math.atan2(delta[1], delta[0]))
         body_yaw = self._current_yaw()
         sensor = self.settings["sensor"]
@@ -183,6 +223,7 @@ class DFSExplorer:
         aligned = False
         measured_yaw = current_yaw
         waiting_for_action = False
+        waiting_for_tof = False
         action_confirmed = action is None
         median_window = self.settings["tof_median_window"]
         samples = []
@@ -191,10 +232,10 @@ class DFSExplorer:
         while True:
             worker_status = self.slam_worker.status() if self.slam_worker is not None else None
             if worker_status is not None and worker_status["error"]:
-                raise RuntimeError(worker_status["error"])
+                raise MissionStop(worker_status["error"])
             action_state = getattr(action, "state", None)
             if action_state in ("action_failed", "action_rejected", "action_exception", "action_aborted"):
-                raise RuntimeError(f"gimbal moveto failed: {action_state}")
+                raise MissionStop(f"gimbal moveto failed: {action_state}")
             measured_yaw, measured_pitch, angle_timestamp = self._gimbal_sample()
             aligned = (angle_timestamp > request_time and
                        abs(_wrap_degrees(target_yaw - measured_yaw)) <= tolerance and
@@ -207,7 +248,7 @@ class DFSExplorer:
                 # SDK does not turn an in-progress action into an exception.
                 wait_for_completed = getattr(action, "wait_for_completed", None)
                 if callable(wait_for_completed) and not wait_for_completed():
-                    raise RuntimeError("gimbal SDK reported success but did not release its action")
+                    raise MissionStop("gimbal SDK reported success but did not release its action")
                 action_confirmed = True
                 if median_window > 1:
                     collection_after = time.time()
@@ -224,6 +265,13 @@ class DFSExplorer:
                     abs(_wrap_degrees(target_yaw - scan_yaw)) <= tolerance and
                     scan_range is not None and
                     time.time() - scan_timestamp <= self.settings["max_sample_age_s"] * 2)
+            if action_confirmed and (worker_status or {}).get("tof_waiting", False):
+                if not waiting_for_tof:
+                    self._set_status("waiting_tof")
+                    waiting_for_tof = True
+            elif waiting_for_tof:
+                self._set_status("scanning")
+                waiting_for_tof = False
             if scan_ready and not action_confirmed and not waiting_for_action:
                 self._set_status("waiting_gimbal_action")
                 waiting_for_action = True
@@ -248,7 +296,7 @@ class DFSExplorer:
             self.wall_grid.checks.pop((tuple(node), delta), None)
         worker_status = self.slam_worker.status() if self.slam_worker is not None else None
         if worker_status is not None and worker_status["error"]:
-            raise RuntimeError(worker_status["error"])
+            raise MissionStop(worker_status["error"])
         pose = self.map.pose
         if pose is None:
             return False
@@ -276,11 +324,21 @@ class DFSExplorer:
         return allowed
 
     def _align_cell(self, node):
-        """Align from one wall per axis, stopping on a close ToF reading."""
+        """Center between two walls, or use the configured distance to one wall."""
+        def skip(status, reason, pose=None, steps=0, after=None):
+            result = {"status": status, "reason": reason, "steps": steps,
+                      "target_distance_m": self.settings["alignment"]["wall_distance_m"]}
+            if after is not None:
+                result["after_m"] = after
+            with self.lock:
+                if pose is not None:
+                    self.cell_targets[node] = tuple(pose)
+                self.alignments[node] = result
+            self.map.set_exploration_state(self.snapshot())
+
         desired = self.settings["alignment"]["wall_distance_m"]
         tolerance = self.settings["alignment"]["tolerance_m"]
         max_shift = self.settings["alignment"]["max_shift_m"]
-        emergency_distance = self.settings["alignment"]["emergency_stop_distance_m"]
         walls = {}
         for delta in self.DIRECTIONS:
             check = self.wall_grid.checks.get((node, delta))
@@ -289,34 +347,32 @@ class DFSExplorer:
             yaw = self.base_pose[2] + math.degrees(math.atan2(delta[1], delta[0]))
             distance = check["range_mm"] / 1000.0 + self._sensor_offset(yaw)
             if not math.isfinite(distance) or distance <= 0:
-                raise RuntimeError(f"invalid wall distance for alignment at {node}")
+                skip("skipped_invalid_wall", f"invalid wall distance at {node}")
+                return
             walls[delta] = distance
 
         selected = []
         for positive, negative in (((1, 0), (-1, 0)), ((0, 1), (0, -1))):
-            if positive in walls:
-                selected.append(positive)
-            elif negative in walls:
-                selected.append(negative)
-            else:
-                selected.append(None)
+            selected.append(tuple(delta for delta in (positive, negative) if delta in walls))
 
-        fresh_readings = {}
-        for delta in selected:
-            if delta is None:
-                continue
-            reading, yaw = self._scan_for_direction(delta)
-            walls[delta] = reading / 1000.0 + self._sensor_offset(yaw)
-            fresh_readings[delta] = reading
+        for sides in selected:
+            for delta in sides:
+                reading, yaw = self._scan_for_direction(delta)
+                if reading > self.settings["wall_threshold_mm"]:
+                    skip("skipped_wall_missing", f"selected wall at {node} is no longer detected")
+                    return
+                walls[delta] = reading / 1000.0 + self._sensor_offset(yaw)
 
         corrections = []
-        for delta in selected:
-            if delta is None:
+        for sides in selected:
+            if not sides:
                 correction = 0.0
-            elif delta[0] > 0 or delta[1] > 0:
-                correction = walls[delta] - desired
+            elif len(sides) == 2:
+                correction = (walls[sides[0]] - walls[sides[1]]) / 2
+            elif sides[0][0] > 0 or sides[0][1] > 0:
+                correction = walls[sides[0]] - desired
             else:
-                correction = desired - walls[delta]
+                correction = desired - walls[sides[0]]
             corrections.append(correction)
 
         shift = math.hypot(*corrections)
@@ -326,25 +382,12 @@ class DFSExplorer:
                   "target_distance_m": desired, "correction_m":
                   [round(value, 4) for value in corrections],
                   "selected_sides": [CellWallGrid.SIDE_NAMES[self.DIRECTIONS.index(delta)]
-                                     for delta in selected if delta is not None],
-                  "emergency_stop_distance_m": emergency_distance}
-        for delta in selected:
-            if delta is None:
-                continue
-            if walls[delta] <= emergency_distance:
-                result["status"] = "emergency_stop_centered"
-                result["emergency_range_mm"] = fresh_readings[delta]
-                result["emergency_center_distance_m"] = round(walls[delta], 4)
-                with self.lock:
-                    self.cell_targets[node] = tuple(self._motion_pose()[:2])
-                    self.alignments[node] = result
-                self.map.set_exploration_state(self.snapshot())
-                return
-        if shift > max_shift:
-            raise RuntimeError(f"alignment at {node} needs {shift:.3f} m, "
-                               f"above configured limit {max_shift:.3f} m")
+                                     for sides in selected for delta in sides],
+                  "axis_modes": {name: ("between_walls" if len(sides) == 2 else "single_wall")
+                                 for name, sides in zip(("x", "y"), selected) if sides}}
         if shift <= tolerance:
             result["status"] = "within_tolerance" if walls else "no_wall"
+            result["steps"] = 0
             with self.lock:
                 self.alignments[node] = result
             self.map.set_exploration_state(self.snapshot())
@@ -354,70 +397,70 @@ class DFSExplorer:
         angle = math.radians(self.base_pose[2])
         self._set_status("aligning")
         verified = {}
-        stopped = False
-        for axis, delta in enumerate(selected):
-            correction = corrections[axis]
-            if delta is None or abs(correction) <= tolerance:
+        steps = 0
+        for axis, sides in enumerate(selected):
+            if not sides:
                 continue
-            reading, yaw = self._scan_for_direction(delta)
-            center_distance = reading / 1000.0 + self._sensor_offset(yaw)
-            if center_distance <= emergency_distance:
-                result["emergency_range_mm"] = reading
-                result["emergency_center_distance_m"] = round(center_distance, 4)
-                stopped = True
-                break
-            step_x = correction * (math.cos(angle) if axis == 0 else -math.sin(angle))
-            step_y = correction * (math.sin(angle) if axis == 0 else math.cos(angle))
-            target = (x + step_x, y + step_y)
-            if not self.map.contains_world(*target):
-                raise RuntimeError(f"alignment target for {node} is outside the SLAM map")
-            target_yaw = _wrap_degrees(yaw - self._current_yaw() -
-                                       float(self.settings["sensor"]["yaw_offset_deg"]))
-
-            def stop_if(_pose):
-                worker_status = self.slam_worker.status()
-                if worker_status["error"]:
-                    raise RuntimeError(worker_status["error"])
-                tof = self.logger.get_sample("tof", max_age_s=self.settings["max_sample_age_s"])
-                if tof is None:
-                    raise RuntimeError("alignment ToF data is missing or stale")
-                scan_yaw, scan_pitch, angle_timestamp = self._gimbal_sample()
-                if abs(tof[1] - angle_timestamp) > self.settings["sample_skew_s"]:
-                    raise RuntimeError("alignment ToF and gimbal timestamps are not synchronized")
-                if (abs(_wrap_degrees(target_yaw - scan_yaw)) >
-                        self.settings["gimbal"]["angle_tolerance_deg"] or
-                        abs(self.settings["gimbal"]["pitch_deg"] - scan_pitch) >
-                        self.settings["gimbal"]["angle_tolerance_deg"]):
-                    raise RuntimeError("alignment ToF no longer points at selected wall")
-                scan_distance = self.map._range_value(tof[0])
-                if scan_distance is None:
-                    raise RuntimeError("alignment ToF reading is invalid")
-                center_distance = scan_distance + self._sensor_offset(yaw)
-                if center_distance <= emergency_distance:
-                    result["emergency_range_mm"] = scan_distance * 1000.0
-                    result["emergency_center_distance_m"] = round(center_distance, 4)
-                    return True
-                return False
-
-            pose = self._drive_holding_current_yaw(*target, kind="alignment",
-                                                   stop_if=stop_if)
-            x, y = pose[:2]
-            if "emergency_range_mm" in result:
-                stopped = True
-                break
-            reading, yaw = self._scan_for_direction(delta)
-            actual = reading / 1000.0 + self._sensor_offset(yaw)
-            name = CellWallGrid.SIDE_NAMES[self.DIRECTIONS.index(delta)]
-            verified[name] = round(actual, 4)
-            expected = walls[delta] - correction * delta[axis]
-            if actual < desired - tolerance or abs(actual - expected) > 2 * tolerance:
-                raise RuntimeError(
-                    f"alignment at {node} did not reach a safe wall distance: "
-                    f"{name} {actual:.3f} m, expected {expected:.3f} m")
+            while True:
+                current = {}
+                for delta in sides:
+                    reading, yaw = self._scan_for_direction(delta)
+                    if reading > self.settings["wall_threshold_mm"]:
+                        skip("skipped_wall_missing", f"selected wall at {node} is no longer detected",
+                             (x, y), steps, verified)
+                        return
+                    distance = reading / 1000.0 + self._sensor_offset(yaw)
+                    current[delta] = (distance, reading, yaw)
+                    name = CellWallGrid.SIDE_NAMES[self.DIRECTIONS.index(delta)]
+                    verified[name] = round(distance, 4)
+                if len(sides) == 2:
+                    correction = (current[sides[0]][0] - current[sides[1]][0]) / 2
+                elif sides[0][axis] > 0:
+                    correction = current[sides[0]][0] - desired
+                else:
+                    correction = desired - current[sides[0]][0]
+                if abs(correction) <= tolerance:
+                    break
+                # max_shift_m limits each PID move. A large correction is
+                # measured again after the first move instead of failing.
+                step = max(-max_shift, min(max_shift, correction))
+                step_x = step * (math.cos(angle) if axis == 0 else -math.sin(angle))
+                step_y = step * (math.sin(angle) if axis == 0 else math.cos(angle))
+                target = (x + step_x, y + step_y)
+                if not self.map.contains_world(*target):
+                    skip("skipped_map_boundary", f"alignment target for {node} is outside the SLAM map",
+                         (x, y), steps, verified)
+                    return
+                pose = self._drive_holding_current_yaw(*target, kind="alignment")
+                x, y = pose[:2]
+                steps += 1
+                actual = {}
+                for delta in sides:
+                    reading, yaw = self._scan_for_direction(delta)
+                    if reading > self.settings["wall_threshold_mm"]:
+                        skip("skipped_wall_missing", f"selected wall at {node} is no longer detected",
+                             (x, y), steps, verified)
+                        return
+                    distance = reading / 1000.0 + self._sensor_offset(yaw)
+                    actual[delta] = distance
+                    name = CellWallGrid.SIDE_NAMES[self.DIRECTIONS.index(delta)]
+                    verified[name] = round(distance, 4)
+                if len(sides) == 2:
+                    remaining = (actual[sides[0]] - actual[sides[1]]) / 2
+                elif sides[0][axis] > 0:
+                    remaining = actual[sides[0]] - desired
+                else:
+                    remaining = desired - actual[sides[0]]
+                if (abs(remaining) > tolerance and
+                        abs(remaining) >= abs(correction) - .005):
+                    skip("stalled", f"remaining correction {remaining:.3f} m at {node}",
+                         (x, y), steps, verified)
+                    return
         with self.lock:
             self.cell_targets[node] = (x, y)
-            result["status"] = "emergency_stop_centered" if stopped else "moved"
+            result["status"] = "moved"
             result["after_m"] = verified
+            result["steps"] = steps
             self.alignments[node] = result
         self.map.set_exploration_state(self.snapshot())
 
@@ -442,28 +485,128 @@ class DFSExplorer:
         """Check the shared map edge without moving the gimbal again."""
         worker_status = self.slam_worker.status() if self.slam_worker is not None else None
         if worker_status is not None and worker_status["error"]:
-            raise RuntimeError(worker_status["error"])
+            raise MissionStop(worker_status["error"])
         back = (parent[0] - child[0], parent[1] - child[1])
         with self.lock:
             return self.wall_grid.state(child, back) == "open"
 
     def _move(self, destination):
         with self.lock:
+            source = self.current_cell
             target = self.cell_targets.get(tuple(destination))
             if target is None:
-                current = self.current_cell
-                origin = self.cell_targets.get(current, self._to_map(current))
+                origin = self.cell_targets.get(source, self._to_map(source))
                 step = self.settings["step_m"]
-                du = (destination[0] - current[0]) * step
-                dv = (destination[1] - current[1]) * step
+                du = (destination[0] - source[0]) * step
+                dv = (destination[1] - source[1]) * step
                 angle = math.radians(self.base_pose[2])
                 target = (origin[0] + du * math.cos(angle) - dv * math.sin(angle),
                           origin[1] + du * math.sin(angle) + dv * math.cos(angle))
                 self.cell_targets[tuple(destination)] = target
+        delta = (destination[0] - source[0], destination[1] - source[1])
+        if delta not in self.DIRECTIONS:
+            raise ValueError("grid movement needs an adjacent destination")
         x, y = target
+        if not self.map.contains_world(x, y):
+            raise MissionStop(f"grid target for {destination} is outside the SLAM map")
+        # A return to a visited cell needs one fresh scan in the travel
+        # direction for the emergency monitor, but not a four-sided scan.
+        measured_mm, world_yaw = self._scan_for_direction(delta)
+        distance = measured_mm / 1000.0 + self._sensor_offset(world_yaw)
+        start_pose = self._motion_pose()
+        emergency_distance = self.settings["emergency_stop_distance_m"]
+        if measured_mm <= self.settings["wall_threshold_mm"]:
+            with self.lock:
+                self.wall_grid.observe(source, delta, distance, measured_mm,
+                                       self.settings["wall_threshold_mm"],
+                                       self.map.latest_scan_timestamp)
+                self.cell_targets[source] = tuple(start_pose[:2])
+                if tuple(destination) not in self.visited:
+                    self.cell_targets.pop(tuple(destination), None)
+                self.last_motion_stop = {
+                    "status": ("emergency_stop_centered" if distance <= emergency_distance
+                               else "blocked_before_move"),
+                    "source_cell": list(source), "destination_cell": list(destination),
+                    "center_cell": list(source), "actual_pose": list(start_pose),
+                    "target_m": [x, y], "entered_destination": False,
+                    "range_mm": measured_mm, "center_distance_m": round(distance, 4),
+                }
+            self.map.set_exploration_state(self.snapshot())
+            return False
+
+        stopped = {}
+        sensor_yaw_offset = float(self.settings["sensor"]["yaw_offset_deg"])
+
+        def stop_if(pose):
+            previous_status = self.status
+            waiting = False
+            while True:
+                worker_status = self.slam_worker.status()
+                if worker_status["error"]:
+                    raise MissionStop(worker_status["error"])
+                tof = self.logger.get_sample("tof", max_age_s=self.settings["max_sample_age_s"])
+                if not worker_status.get("waiting_telemetry") and tof is not None:
+                    scan_yaw, scan_pitch, angle_timestamp = self._gimbal_sample()
+                    if abs(tof[1] - angle_timestamp) <= self.settings["sample_skew_s"]:
+                        getter = getattr(self.chassis, "get_pose", None)
+                        live_pose = getter() if callable(getter) else pose
+                        if live_pose is not None:
+                            pose = live_pose
+                            break
+                if not waiting:
+                    self._set_status("waiting_telemetry")
+                    waiting = True
+                self.chassis.stop()
+                time.sleep(0.05)
+            if waiting:
+                self._set_status(previous_status)
+            target_yaw = _wrap_degrees(world_yaw - pose[2] - sensor_yaw_offset)
+            tolerance = self.settings["gimbal"]["angle_tolerance_deg"]
+            if (abs(_wrap_degrees(target_yaw - scan_yaw)) > tolerance or
+                    abs(self.settings["gimbal"]["pitch_deg"] - scan_pitch) > tolerance):
+                raise MissionStop("movement ToF no longer points in the travel direction")
+            scan_distance = self.map._range_value(tof[0])
+            if scan_distance is None:
+                return False
+            center_distance = scan_distance + self._sensor_offset(world_yaw)
+            if center_distance <= emergency_distance:
+                stopped.update({"range_mm": scan_distance * 1000.0,
+                                "center_distance_m": round(center_distance, 4),
+                                "timestamp": tof[1]})
+                return True
+            return False
+
         previous_scan = self.map.latest_scan_timestamp or 0.0
         previous_status = self.status
-        self._drive_holding_current_yaw(x, y, kind="grid_step")
+        pose = self._drive_holding_current_yaw(x, y, kind="grid_step", stop_if=stop_if)
+        entered = True
+        if stopped:
+            path_x, path_y = x - start_pose[0], y - start_pose[1]
+            path_length = math.hypot(path_x, path_y)
+            progress = ((pose[0] - start_pose[0]) * path_x +
+                        (pose[1] - start_pose[1]) * path_y) / max(path_length, 1e-9)
+            entered = progress >= path_length / 2.0
+            center_cell = tuple(destination) if entered else source
+            with self.lock:
+                self.cell_targets[center_cell] = tuple(pose[:2])
+                if not entered and tuple(destination) not in self.visited:
+                    self.cell_targets.pop(tuple(destination), None)
+                self.wall_grid.observe(center_cell, delta,
+                                       stopped["center_distance_m"],
+                                       stopped["range_mm"],
+                                       self.settings["wall_threshold_mm"],
+                                       stopped["timestamp"])
+                self.last_motion_stop = {
+                    "status": "emergency_stop_centered",
+                    "source_cell": list(source), "destination_cell": list(destination),
+                    "center_cell": list(center_cell), "actual_pose": list(pose),
+                    "target_m": [x, y], "entered_destination": entered,
+                    "range_mm": stopped["range_mm"],
+                    "center_distance_m": stopped["center_distance_m"],
+                }
+            self.map.set_exploration_state(self.snapshot())
+            if not entered:
+                return False
         with self.lock:
             self.moves += 1
             self.current_cell = tuple(destination)
@@ -471,10 +614,10 @@ class DFSExplorer:
         while True:
             if (self.map.latest_scan_timestamp or 0.0) > previous_scan:
                 self._set_status(previous_status)
-                return
+                return True
             worker_status = self.slam_worker.status()
             if worker_status["error"]:
-                raise RuntimeError(worker_status["error"])
+                raise MissionStop(worker_status["error"])
             time.sleep(0.05)
 
     def run(self, slam_worker):
@@ -485,7 +628,7 @@ class DFSExplorer:
             slam_worker.wait_ready()
             pose = self.map.pose
             if pose is None:
-                raise RuntimeError("SLAM has no initial pose")
+                raise MissionStop("SLAM has no initial pose")
             with self.lock:
                 self.base_pose = tuple(pose)
                 self.wall_grid.cells.add((0, 0))
@@ -505,9 +648,10 @@ class DFSExplorer:
                         with self.lock:
                             child, parent = self.stack[-1], self.stack[-2]
                         if not self._can_return(child, parent):
-                            raise RuntimeError("DFS cannot safely return to the start cell")
+                            raise MissionStop("DFS cannot safely return to the start cell")
                         self._set_status("returning_to_start")
-                        self._move(parent)
+                        if not self._move(parent):
+                            raise MissionStop("DFS cannot safely return to the start cell")
                         with self.lock:
                             self.stack.pop()
                     self._set_status("node_limit_returned")
@@ -531,10 +675,10 @@ class DFSExplorer:
 
                 if next_node is not None:
                     self._set_status(f"moving_to_{next_node[0]}_{next_node[1]}")
-                    self._move(next_node)
-                    with self.lock:
-                        self.stack.append(next_node)
-                        self.visited.add(next_node)
+                    if self._move(next_node):
+                        with self.lock:
+                            self.stack.append(next_node)
+                            self.visited.add(next_node)
                     self._set_status("exploring")
                     continue
 
@@ -550,13 +694,17 @@ class DFSExplorer:
                     parent = self.stack[-1] if self.stack else None
                 if parent is not None:
                     if not self._can_return(finished, parent):
-                        raise RuntimeError("DFS backtrack path is no longer clear")
+                        raise MissionStop("DFS backtrack path is no longer clear")
                     self._set_status(f"backtracking_to_{parent[0]}_{parent[1]}")
-                    self._move(parent)
+                    if not self._move(parent):
+                        raise MissionStop("DFS cannot safely backtrack to the parent cell")
                     self._set_status("exploring")
 
             self._set_status("completed")
             return self.snapshot()
+        except MissionStop as error:
+            self._set_status("stopped", str(error))
+            raise
         except Exception as error:
             self._set_status("failed", str(error))
             raise

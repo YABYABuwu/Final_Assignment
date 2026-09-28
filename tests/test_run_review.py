@@ -81,6 +81,20 @@ class ReviewTests(unittest.TestCase):
             self.assertEqual(result["issues"][0]["level"], "warning")
             self.assertIn("ไม่มีทิศ", result["issues"][0]["message"])
 
+    def test_stopped_run_and_stalled_alignment_are_visible_in_review(self):
+        with tempfile.TemporaryDirectory() as temp:
+            run_dir = Path(temp) / "alignment_stop"
+            run_dir.mkdir()
+            (run_dir / "run_summary.json").write_text(json.dumps({
+                "status": "stopped", "error": "movement ToF data is missing or stale",
+                "exploration": {"alignments": {"2,0": {
+                    "status": "stalled", "reason": "remaining correction 0.059 m at (2, 0)",
+                }}},
+            }), encoding="utf-8")
+            issues = RunStore(temp).load_run(run_dir.name)["issues"]
+            self.assertTrue(any("movement ToF" in issue["message"] for issue in issues))
+            self.assertTrue(any("0.059 m" in issue["message"] for issue in issues))
+
     def test_zero_tof_is_reported_once_per_invalid_streak(self):
         with tempfile.TemporaryDirectory() as temp:
             run_dir = Path(temp) / "zeros"

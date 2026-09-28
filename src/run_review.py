@@ -80,7 +80,7 @@ class RunStore:
         summary = self._summary(run_path)
         streams = {}
         issues = []
-        if summary.get("status") in ("failed", "interrupted"):
+        if summary.get("status") in ("failed", "interrupted", "stopped"):
             issues.append({"level": "error", "time_s": None,
                            "message": f"Run {summary['status']}: {summary.get('error') or 'stopped early'}"})
         elif summary.get("status") == "no_safe_direction":
@@ -91,6 +91,10 @@ class RunStore:
                            "message": f"CSV queue dropped {summary['dropped_csv_rows']} rows"})
         for error in summary.get("logger_errors", []):
             issues.append({"level": "error", "time_s": None, "message": str(error)})
+        for cell, alignment in (summary.get("exploration") or {}).get("alignments", {}).items():
+            if alignment.get("status") == "stalled" or alignment.get("status", "").startswith("skipped_"):
+                issues.append({"level": "warning", "time_s": None,
+                               "message": f"Alignment {cell}: {alignment.get('reason') or alignment['status']}"})
 
         for path in sorted(run_path.glob("*.csv")):
             if not path.is_file() or path.is_symlink():

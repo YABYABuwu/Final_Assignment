@@ -8,6 +8,7 @@ import time
 from collections import deque
 from datetime import datetime
 from pathlib import Path
+from src.mission_stop import MissionStop
 
 
 # name: (robot module, subscribe method, unsubscribe method, CSV column names)
@@ -115,7 +116,7 @@ class SensorLogger:
     def start(self):
         """Start selected subscriptions. Call once after robot.initialize()."""
         if self.active:
-            raise RuntimeError("logger is already started")
+            raise MissionStop("logger is already started")
         self.run_dir = None
         if any(s["enabled"] and s["save"] for s in self.stream_settings.values()):
             stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
@@ -155,7 +156,7 @@ class SensorLogger:
                         csv.writer(file).writerow(["timestamp", "elapsed_s", *columns])
                 result = getattr(module, subscribe)(**options)
                 if result is False:
-                    raise RuntimeError(f"could not subscribe to {name}")
+                    raise MissionStop(f"could not subscribe to {name}")
                 self.active.append(name)
         except Exception:
             self.stop()
@@ -197,7 +198,7 @@ class SensorLogger:
         deadline = None if timeout_s is None else time.monotonic() + timeout_s
         while deadline is None or time.monotonic() < deadline:
             if not self.accepting:
-                raise RuntimeError("sensor logger stopped before receiving data")
+                raise MissionStop("sensor logger stopped before receiving data")
             sample = self.get_latest(name)
             if sample is not None:
                 return sample
@@ -222,6 +223,9 @@ class SensorLogger:
             self.writer_thread = None
         if self.write_error is not None:
             errors.append(f"CSV write: {self.write_error}")
+        if errors:
+            self.run_status = "stopped"
+            self.run_error = "logger stop failed: " + "; ".join(errors)
         if self.run_dir is not None:
             summary = {
                 "status": self.run_status,
@@ -231,6 +235,7 @@ class SensorLogger:
                 "dropped_csv_rows": self.dropped_rows,
                 "received_rows": self.received_rows,
                 "stream_settings": self.stream_settings,
+                "motion_settings": getattr(self, "motion_settings", None),
                 "logger_errors": errors,
                 "exploration": self.exploration_state,
             }
@@ -238,5 +243,4 @@ class SensorLogger:
             with temporary_path.open("w", encoding="utf-8") as file:
                 json.dump(summary, file, ensure_ascii=False, indent=2)
             temporary_path.replace(self.run_dir / "run_summary.json")
-        if errors:
-            raise RuntimeError("logger stop failed: " + "; ".join(errors))
+        return not errors

@@ -7,6 +7,7 @@ import threading
 import time
 import zlib
 from pathlib import Path
+from src.mission_stop import MissionStop
 
 
 MAP_FORMAT = "robomaster-occupancy-grid"
@@ -808,6 +809,7 @@ class SlamWorker:
         self.ready = threading.Event()
         self.last_tof_timestamp = None
         self.error = None
+        self.waiting_telemetry = False
         self.lock = threading.Lock()
         self.abort_event = threading.Event()
         self.started_at = None
@@ -815,7 +817,7 @@ class SlamWorker:
 
     def start(self):
         if self.is_running:
-            raise RuntimeError("SLAM worker is already running")
+            raise MissionStop("SLAM worker is already running")
         self.stop_event.clear()
         self.abort_event.clear()
         self.ready.clear()
@@ -823,6 +825,7 @@ class SlamWorker:
         self.last_good_scan_monotonic = None
         self.last_tof_timestamp = None
         self.error = None
+        self.waiting_telemetry = False
         self.is_running = True
         self.thread = threading.Thread(target=self._run, name="slam-map-updater", daemon=True)
         self.thread.start()
@@ -847,7 +850,7 @@ class SlamWorker:
                         raise ValueError("exploration needs the complete RoboMaster chassis status sample")
                     for index in (4, 5, 6, 7, 8, 9):
                         if index < len(status_values) and status_values[index] not in (0, False, None):
-                            raise RuntimeError(f"robot safety status flag {index} is active")
+                            raise MissionStop(f"robot safety status flag {index} is active")
                     channel = int(self.settings["sensor"]["tof_channel"])
                     if len(values) <= channel:
                         raise ValueError("ToF callback did not include the configured channel")
@@ -858,7 +861,10 @@ class SlamWorker:
                     timestamps = (position[1], attitude[1], timestamp,
                                   gimbal_timestamp, status[1])
                     synchronized = max(timestamps) - min(timestamps) <= self.settings["sample_skew_s"]
-                    if synchronized and timestamp != self.last_tof_timestamp:
+                    if not synchronized:
+                        with self.lock:
+                            self.waiting_telemetry = True
+                    elif timestamp != self.last_tof_timestamp:
                         if self.map.scan_is_valid(reading_mm, gimbal_yaw_deg):
                             pose = (position[0][0], position[0][1], attitude[0][0])
                             self.map.update(pose, reading_mm, timestamp=timestamp,
@@ -868,12 +874,16 @@ class SlamWorker:
                             self.ready.set()
                             with self.lock:
                                 self.error = None
-                        elif self.ready.is_set() and self._scan_stale():
-                            self._fail("valid ToF data became stale during exploration")
+                                self.waiting_telemetry = False
+                        # A fresh callback can contain an invalid range (for
+                        # example 0 mm). Skip it and wait for a usable scan;
+                        # repeated invalid values are not a worker failure.
                     elif self.ready.is_set() and self._scan_stale():
-                        self._fail("pose, gimbal, status and ToF timestamps did not stay synchronized")
+                        with self.lock:
+                            self.waiting_telemetry = True
                 elif self.ready.is_set() and self._scan_stale():
-                    self._fail("pose, gimbal, status or ToF telemetry became stale during exploration")
+                    with self.lock:
+                        self.waiting_telemetry = True
             except Exception as error:
                 self._fail(str(error))
             remaining = period - (time.monotonic() - started)
@@ -898,9 +908,9 @@ class SlamWorker:
             with self.lock:
                 error = self.error
             if error:
-                raise RuntimeError(error)
+                raise MissionStop(error)
             if self.stop_event.is_set():
-                raise RuntimeError("SLAM worker stopped before the first valid scan")
+                raise MissionStop("SLAM worker stopped before the first valid scan")
             if deadline is not None and time.monotonic() >= deadline:
                 raise TimeoutError("SLAM did not receive synchronized pose, gimbal, status and ToF data")
             self.ready.wait(0.1)
@@ -922,9 +932,11 @@ class SlamWorker:
     def status(self):
         with self.lock:
             error = self.error
+            waiting_telemetry = self.waiting_telemetry
         tof = self.logger.get_sample("tof", max_age_s=self.settings["max_sample_age_s"])
         channel = int(self.settings["sensor"]["tof_channel"])
         tof_waiting = (tof is None or len(tof[0]) <= channel or
                        self.map._range_value(tof[0][channel]) is None)
         return {"running": self.is_running, "ready": self.ready.is_set(),
-                "error": error, "tof_waiting": tof_waiting}
+                "error": error, "tof_waiting": tof_waiting,
+                "waiting_telemetry": waiting_telemetry}
