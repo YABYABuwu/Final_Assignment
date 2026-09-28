@@ -1,0 +1,76 @@
+"""Unit tests for the img_processing package."""
+
+import unittest
+import numpy as np
+import cv2
+
+from img_processing.detector import (
+    ColorShapeDetector,
+    detect,
+    classify_shape_classic,
+    classify_shape_robust,
+    color_mask,
+    undistort_frame,
+)
+from img_processing.config import COLORS, DEFAULT_DETECTION_CONFIG
+
+
+class TestImageProcessing(unittest.TestCase):
+    def setUp(self):
+        # 720p blank image
+        self.frame_h, self.frame_w = 720, 1280
+        self.img = np.zeros((self.frame_h, self.frame_w, 3), dtype=np.uint8)
+
+    def test_color_mask(self):
+        # Draw red, green, yellow, blue boxes
+        hsv_test = np.zeros((100, 100, 3), dtype=np.uint8)
+        # Fill with pure green in HSV: H=60, S=200, V=200
+        hsv_test[:] = (60, 200, 200)
+        mask = color_mask(hsv_test, "green")
+        self.assertGreater(cv2.countNonZero(mask), 5000)
+
+    def test_ideal_shapes_detection(self):
+        # Red circle
+        cv2.circle(self.img, (250, 360), 70, (40, 40, 240), -1)
+        # Green square
+        cv2.rectangle(self.img, (550, 290), (690, 430), (50, 200, 50), -1)
+        # Yellow horizontal rectangle
+        cv2.rectangle(self.img, (850, 320), (1050, 400), (0, 220, 240), -1)
+
+        detections, _ = detect(self.img, mode="robust")
+        shapes_found = {(d.color, d.shape) for d in detections}
+        self.assertIn(("red", "circle"), shapes_found)
+        self.assertIn(("green", "square"), shapes_found)
+        self.assertIn(("yellow", "horizontal"), shapes_found)
+
+    def test_perspective_circle_as_ellipse(self):
+        # Circle viewed at angle becomes an ellipse
+        cv2.ellipse(self.img, (300, 360), (100, 65), 30, 0, 360, (40, 40, 240), -1)
+        
+        # Robust mode should successfully identify it as a circle
+        robust_dets, _ = detect(self.img, mode="robust")
+        robust_shapes = {(d.color, d.shape) for d in robust_dets}
+        self.assertIn(("red", "circle"), robust_shapes)
+
+        # Classic mode rejects the ellipse because circularity and ratio are too low
+        classic_dets, _ = detect(self.img, mode="classic")
+        classic_shapes = {(d.color, d.shape) for d in classic_dets}
+        self.assertNotIn(("red", "circle"), classic_shapes)
+
+    def test_perspective_square_as_trapezoid(self):
+        # Square viewed obliquely forms a trapezoid
+        trap_pts = np.array([[550, 310], [720, 260], [735, 460], [550, 410]], dtype=np.int32)
+        cv2.fillPoly(self.img, [trap_pts], (50, 200, 50))
+
+        # Robust mode identifies it as square
+        robust_dets, _ = detect(self.img, mode="robust")
+        robust_shapes = {(d.color, d.shape) for d in robust_dets}
+        self.assertIn(("green", "square"), robust_shapes)
+
+    def test_undistort_function(self):
+        out = undistort_frame(self.img)
+        self.assertEqual(out.shape, self.img.shape)
+
+
+if __name__ == "__main__":
+    unittest.main()
