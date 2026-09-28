@@ -61,6 +61,9 @@ class FakeGimbal:
 
         return SimpleNamespace(has_succeeded=True, wait_for_completed=release)
 
+    def recenter(self, pitch_speed, yaw_speed):
+        return self.moveto(0, 0, pitch_speed, yaw_speed)
+
 
 class FakeFrames:
     def __init__(self, frame):
@@ -258,18 +261,42 @@ class TargetTests(unittest.TestCase):
         inspector.logger.chassis_pitch = -23.6
         scan_commands = []
 
-        def scan_move(pitch, yaw, pitch_speed, yaw_speed):
-            scan_commands.append((pitch, yaw))
-            inspector.logger.chassis_pitch = pitch
-            inspector.logger.yaw = yaw
+        def scan_recenter(pitch_speed, yaw_speed):
+            scan_commands.append("recenter")
+            inspector.logger.chassis_pitch = 0
+            inspector.logger.yaw = 0
             inspector.logger.timestamp = time.time() + .01
             return SimpleNamespace(has_succeeded=True, wait_for_completed=lambda: True)
 
-        inspector.scan_gimbal = SimpleNamespace(moveto=scan_move)
+        inspector.scan_gimbal = SimpleNamespace(recenter=scan_recenter)
         result = inspector.inspect((0, 0), (0, -1), -90, 0)
         self.assertEqual(result["status"], "targets_checked")
-        self.assertEqual(scan_commands, [(0.0, 0)])
+        self.assertEqual(scan_commands, ["recenter"])
         self.assertEqual(gimbal.commands[0], (-15.0, -90))
+
+    def test_interrupted_restore_records_recenter_action_state(self):
+        inspector, _, worker, _ = self.make_inspector()
+        progress = []
+        inspector.on_progress = progress.append
+
+        def recenter(pitch_speed, yaw_speed):
+            return SimpleNamespace(state="action_running", has_succeeded=False)
+
+        inspector.scan_gimbal = SimpleNamespace(recenter=recenter)
+        inspector.logger.get_sample_original = inspector.logger.get_sample
+
+        def interrupted_sample(name, max_age_s=None):
+            if name == "gimbal" and inspector.active_action is not None:
+                raise KeyboardInterrupt()
+            return inspector.logger.get_sample_original(name, max_age_s)
+
+        inspector.logger.get_sample = interrupted_sample
+        with self.assertRaises(KeyboardInterrupt):
+            inspector.inspect((0, 0), (0, -1), -90, 0)
+        self.assertFalse(worker.paused)
+        self.assertEqual(progress[-1]["status"], "stopped")
+        self.assertEqual(progress[-1]["interrupted_from"], "waiting_target_action")
+        self.assertEqual(progress[-1]["action_state"], "action_running")
 
     def test_interrupted_inspection_records_the_waiting_step(self):
         inspector, _, worker, _ = self.make_inspector()

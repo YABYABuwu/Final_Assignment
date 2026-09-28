@@ -74,20 +74,28 @@ class WallTargetInspector:
             self.chassis.stop()
             time.sleep(.05)
 
-    def _point(self, pitch, yaw, pitch_frame="ground"):
+    def _point(self, pitch, yaw, pitch_frame="ground", recenter=False):
         """Wait for both SDK action release and fresh angle telemetry."""
+        if self.active_cell is not None:
+            self._progress(self.active_cell, self.active_delta, "waiting_target_safety")
         self._safe_status()
         request_time = time.time()
         try:
             gimbal = self.gimbal if pitch_frame == "ground" else self.scan_gimbal
-            action = gimbal.moveto(
-                pitch=pitch, yaw=yaw, pitch_speed=30,
-                yaw_speed=self.settings["gimbal"]["yaw_speed_deg_s"])
+            if recenter:
+                action = gimbal.recenter(
+                    pitch_speed=30,
+                    yaw_speed=self.settings["gimbal"]["yaw_speed_deg_s"])
+            else:
+                action = gimbal.moveto(
+                    pitch=pitch, yaw=yaw, pitch_speed=30,
+                    yaw_speed=self.settings["gimbal"]["yaw_speed_deg_s"])
         except Exception as error:
             raise MissionStop(f"target gimbal command failed: {error}") from error
         self.active_action = action
         released = action is None
         reported_state = None
+        reported_angle_state = None
         while True:
             self._health()
             state = getattr(action, "state", None)
@@ -105,16 +113,23 @@ class WallTargetInspector:
                         raise MissionStop("target gimbal action was not released by SDK")
                 released = True
                 self.active_action = None
-            measured_pitch, measured_yaw, timestamp = self._angles(pitch_frame)
             waiting_state = "waiting_target_angle" if released else "waiting_target_action"
             if waiting_state != reported_state and self.active_cell is not None:
+                self._progress(self.active_cell, self.active_delta, waiting_state,
+                               pitch_frame=pitch_frame,
+                               target_pitch_deg=pitch,
+                               target_yaw_deg=yaw,
+                               action_state=state)
+                reported_state = waiting_state
+            measured_pitch, measured_yaw, timestamp = self._angles(pitch_frame)
+            if waiting_state != reported_angle_state and self.active_cell is not None:
                 self._progress(self.active_cell, self.active_delta, waiting_state,
                                pitch_frame=pitch_frame,
                                target_pitch_deg=pitch,
                                actual_pitch_deg=round(measured_pitch, 2),
                                target_yaw_deg=yaw, actual_yaw_deg=round(measured_yaw, 2),
                                action_state=state)
-                reported_state = waiting_state
+                reported_angle_state = waiting_state
             if (released and timestamp > request_time and
                     abs(measured_pitch - pitch) <= self.settings["gimbal"]["pitch_tolerance_deg"] and
                     abs(_wrap_degrees(measured_yaw - yaw)) <=
@@ -241,20 +256,22 @@ class WallTargetInspector:
             return result
         finally:
             restored = False
-            interrupted_from = self.last_progress_status
-            pending_action_state = getattr(self.active_action, "state", None)
+            inspection_wait = self.last_progress_status
             try:
                 self.restoring = True
                 if self.active_action is None:
                     self._progress(cell, delta, "restoring_scan_angle")
-                    self._point(self.settings["gimbal"]["pitch_deg"], original_yaw,
-                                pitch_frame="chassis")
+                    # The SDK center action proved reliable before DFS scans.
+                    # The next scan chooses its own yaw, so restoring the old
+                    # wall-facing yaw is unnecessary.
+                    self._point(0, 0, pitch_frame="chassis", recenter=True)
                     restored = True
             finally:
                 self.restoring = False
                 self.slam_worker.resume_mapping()
                 self._progress(cell, delta, result["status"] if restored and
                                result["status"] != "checking" else "stopped",
-                               interrupted_from=interrupted_from if result["status"] == "checking" else None,
-                               action_state=pending_action_state)
+                               interrupted_from=(self.last_progress_status if not restored else
+                                                 inspection_wait if result["status"] == "checking" else None),
+                               action_state=getattr(self.active_action, "state", None))
                 self.active_cell = self.active_delta = None
