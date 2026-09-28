@@ -20,6 +20,23 @@ def red_square(center=(320, 180), size=90):
     return frame
 
 
+def two_targets(yaw=0):
+    frame = np.zeros((360, 640, 3), dtype=np.uint8)
+    shift = round(yaw * 640 / 90)
+    cv2.rectangle(frame, (175 - shift, 135), (265 - shift, 225), (0, 0, 255), -1)
+    cv2.circle(frame, (430 - shift, 180), 48, (0, 255, 0), -1)
+    return frame
+
+
+def two_red_squares(yaw=0):
+    frame = np.zeros((360, 640, 3), dtype=np.uint8)
+    shift = round(yaw * 640 / 90)
+    for center_x in (200, 440):
+        cv2.rectangle(frame, (center_x - 45 - shift, 135),
+                      (center_x + 45 - shift, 225), (0, 0, 255), -1)
+    return frame
+
+
 class FakeLogger:
     def __init__(self):
         self.pitch = 0
@@ -179,6 +196,61 @@ class TargetTests(unittest.TestCase):
         self.assertGreater(len(gimbal.commands), 2)
         self.assertEqual(len(calls), 1)
         self.assertFalse(worker.paused)
+
+    def test_wall_inspection_aims_at_two_targets_on_same_wall(self):
+        inspector, gimbal, worker, calls = self.make_inspector()
+        inspector.settings["target_inspection"]["max_targets_per_wall"] = 2
+
+        class MovingFrames(FakeFrames):
+            def wait_for_frame(self, after_number=0, check_health=None):
+                if check_health:
+                    check_health()
+                self.number = after_number + 1
+                return self.number, two_targets(gimbal.logger.yaw)
+
+        inspector.camera_frames = MovingFrames(two_targets())
+        result = inspector.inspect((0, 0), (1, 0), 0, 0)
+        self.assertEqual(result["status"], "targets_checked")
+        self.assertEqual({(item["color"], item["shape"]) for item in result["targets"]},
+                         {("red", "square"), ("green", "circle")})
+        self.assertEqual(calls, [{"fire_type": "infrared", "times": 1}] * 2)
+        self.assertFalse(worker.paused)
+
+    def test_pitch_limit_fires_two_infrared_shots_after_stable_horizontal_aim(self):
+        inspector, gimbal, worker, calls = self.make_inspector()
+        inspector.settings["target_inspection"]["pitch_deg"] = -20.0
+        inspector.camera_frames = FakeFrames(red_square(center=(320, 270)))
+        result = inspector.inspect((0, 0), (1, 0), 0, 0)
+        self.assertEqual(calls, [{"fire_type": "infrared", "times": 2}])
+        self.assertEqual(result["targets"][0]["shots_requested"], 2)
+        self.assertEqual(result["targets"][0]["aim_mode"], "pitch_limit")
+        self.assertFalse(worker.paused)
+
+    def test_two_same_color_shapes_are_aimed_separately(self):
+        inspector, gimbal, _, calls = self.make_inspector()
+        inspector.settings["target_inspection"]["max_targets_per_wall"] = 2
+
+        class MovingFrames(FakeFrames):
+            def wait_for_frame(self, after_number=0, check_health=None):
+                if check_health:
+                    check_health()
+                self.number = after_number + 1
+                return self.number, two_red_squares(gimbal.logger.yaw)
+
+        inspector.camera_frames = MovingFrames(two_red_squares())
+        result = inspector.inspect((0, 0), (1, 0), 0, 0)
+        self.assertEqual(len(result["targets"]), 2)
+        self.assertTrue(all(item["status"] == "fire_command_accepted" for item in result["targets"]))
+        self.assertEqual(len(calls), 2)
+
+    def test_pitch_limit_does_not_fire_without_horizontal_alignment(self):
+        inspector, _, _, calls = self.make_inspector()
+        inspector.settings["target_inspection"].update({"pitch_deg": -20.0,
+                                                        "max_aim_steps": 4})
+        inspector.camera_frames = FakeFrames(red_square(center=(480, 270)))
+        result = inspector.inspect((0, 0), (1, 0), 0, 0)
+        self.assertEqual(calls, [])
+        self.assertEqual(result["targets"][0]["status"], "aim_steps_exhausted")
 
     def test_safety_flag_prevents_aiming_and_firing(self):
         inspector, gimbal, worker, calls = self.make_inspector()

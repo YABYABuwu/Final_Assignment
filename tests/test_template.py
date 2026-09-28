@@ -8,6 +8,9 @@ from unittest.mock import patch
 from pathlib import Path
 from types import SimpleNamespace
 
+import cv2
+import numpy as np
+
 from main import _sdk_connection_type
 from src.PID import PIDController
 from src.chassis import ChassisController, angle_error
@@ -158,6 +161,33 @@ class TemplateTests(unittest.TestCase):
             dashboard._camera_loop()
         self.assertEqual(dashboard.frame_number, 1)
         self.assertEqual(dashboard.camera_error, "camera disconnected")
+
+    def test_dashboard_boxes_targets_without_changing_inspection_frame(self):
+        image = np.zeros((360, 640, 3), dtype=np.uint8)
+        cv2.rectangle(image, (270, 130), (370, 230), (0, 0, 255), -1)
+        calls = []
+
+        def read_image(**options):
+            calls.append(options)
+            if len(calls) == 1:
+                return image
+            raise OSError("camera disconnected")
+
+        config = load_config()
+        dashboard = Dashboard(
+            SimpleNamespace(camera=SimpleNamespace(read_cv2_image=read_image)),
+            SimpleNamespace(stream_settings={}, dropped_rows=0), config["dashboard"],
+            target_settings=config["exploration"]["target_inspection"])
+        dashboard.running.set()
+        dashboard._camera_loop()
+
+        self.assertEqual(dashboard.camera_targets[0]["color"], "red")
+        self.assertEqual(dashboard.camera_targets[0]["shape"], "square")
+        self.assertTrue(np.array_equal(dashboard.latest_frame, image))
+        original_jpeg = cv2.imencode(".jpg", image,
+                                    [cv2.IMWRITE_JPEG_QUALITY,
+                                     config["dashboard"]["jpeg_quality"]])[1].tobytes()
+        self.assertNotEqual(dashboard.latest_jpeg, original_jpeg)
 
     def test_logger_selection_and_csv(self):
         module = FakeModule()

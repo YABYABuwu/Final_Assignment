@@ -126,7 +126,7 @@ exploration:
     aim_offset_x_fraction: 0.0 # ปรับจุดเล็ง IR เทียบกึ่งกลางภาพหลังทดลองระยะใกล้
     aim_offset_y_fraction: 0.0
     max_aim_steps: 12       # จำนวนคำสั่งกิมบอลสูงสุดต่อเป้า ไม่ใช่ timeout
-    max_targets_per_wall: 4
+    max_targets_per_wall: 16 # จำนวนเป้าสูงสุดที่ตรวจต่อกำแพงหนึ่งด้าน
     max_step_deg: 6.0       # จำกัดการปรับหัวแต่ละครั้ง
     camera_hfov_deg: 90.0   # ค่าเริ่มทดลอง ต้องสอบเทียบภาพจริง
     camera_vfov_deg: 60.0

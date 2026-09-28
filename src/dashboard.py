@@ -17,7 +17,8 @@ PAGE = Path(__file__).resolve().parent.parent / "dashboard" / "index.html"
 
 class Dashboard:
     def __init__(self, robot, logger, settings, slam_map=None, slam_worker=None,
-                 explorer=None, motion_settings=None, rear_ir=None, front_ir=None):
+                 explorer=None, motion_settings=None, rear_ir=None, front_ir=None,
+                 target_settings=None):
         self.camera = robot.camera
         self.logger = logger
         self.settings = settings
@@ -27,10 +28,12 @@ class Dashboard:
         self.motion_settings = motion_settings
         self.rear_ir = rear_ir
         self.front_ir = front_ir
+        self.target_settings = target_settings
         self.running = threading.Event()
         self.frame_changed = threading.Condition()
         self.latest_jpeg = None
         self.latest_frame = None
+        self.camera_targets = []
         self.frame_number = 0
         self.camera_error = None
         self.mission_status = "Ready"
@@ -49,14 +52,39 @@ class Dashboard:
             try:
                 image = self.camera.read_cv2_image(timeout=1, strategy="newest")
                 if image is not None:
+                    annotated = image
+                    camera_targets = []
+                    if self.target_settings is not None and self.target_settings["enabled"]:
+                        from src.targets import detect
+                        selected = self.target_settings["selected"]
+                        selected = None if selected == "all" else {
+                            tuple(pair.split(":")) for pair in selected}
+                        detections = detect(image, self.target_settings["min_area_fraction"],
+                                            selected)
+                        annotated = image.copy()
+                        height, width = image.shape[:2]
+                        box_colors = {"red": (55, 55, 255), "green": (80, 240, 80),
+                                      "yellow": (60, 220, 255), "blue": (255, 140, 70)}
+                        for item in detections:
+                            x, y, w, h = cv2.boundingRect(item.contour)
+                            color = box_colors[item.color]
+                            cv2.rectangle(annotated, (x, y), (x + w, y + h), color, 2)
+                            cv2.putText(annotated, f"{item.color} {item.shape}",
+                                        (x, max(15, y - 5)), cv2.FONT_HERSHEY_SIMPLEX,
+                                        .5, color, 1, cv2.LINE_AA)
+                            camera_targets.append({"color": item.color, "shape": item.shape,
+                                                   "center": list(item.center),
+                                                   "box": [x, y, w, h],
+                                                   "area_fraction": round(item.area / (width * height), 4)})
                     ok, encoded = cv2.imencode(
-                        ".jpg", image,
+                        ".jpg", annotated,
                         [cv2.IMWRITE_JPEG_QUALITY, self.settings["jpeg_quality"]],
                     )
                     if ok:
                         with self.frame_changed:
                             self.latest_jpeg = encoded.tobytes()
                             self.latest_frame = image.copy() if hasattr(image, "copy") else image
+                            self.camera_targets = camera_targets
                             self.frame_number += 1
                             self.frame_changed.notify_all()
             except Empty:
@@ -89,6 +117,9 @@ class Dashboard:
 
     def snapshot(self):
         """Build a JSON friendly snapshot without touching the camera or disk."""
+        with self.frame_changed:
+            camera_ready = self.latest_jpeg is not None
+            camera_targets = list(self.camera_targets)
         streams = {}
         for name in STREAMS:
             if self.logger.stream_settings.get(name, {}).get("enabled"):
@@ -96,7 +127,8 @@ class Dashboard:
         return {
             "streams": streams,
             "dropped_csv_rows": self.logger.dropped_rows,
-            "camera_ready": self.latest_jpeg is not None,
+            "camera_ready": camera_ready,
+            "camera_targets": camera_targets,
             "camera_error": self.camera_error,
             "mission_status": self.mission_status,
             "motion_settings": self.motion_settings,

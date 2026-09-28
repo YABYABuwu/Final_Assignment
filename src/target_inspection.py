@@ -1,4 +1,4 @@
-"""Stationary wall inspection and one infrared command per confirmed target."""
+"""Stationary wall inspection and bounded infrared shots per confirmed target."""
 
 import math
 import time
@@ -145,10 +145,32 @@ class WallTargetInspector:
                            after_frame=after)
         return self.camera_frames.wait_for_frame(after, check_health=self._health)
 
+    def _fire(self, item, frame, shots, aim_mode):
+        self._safe_status()
+        pitch, yaw, _ = self._angles()
+        expected_pitch, expected_yaw = self.commanded_angles
+        if (abs(pitch - expected_pitch) > self.settings["gimbal"]["pitch_tolerance_deg"] or
+                abs(_wrap_degrees(yaw - expected_yaw)) >
+                self.settings["gimbal"]["angle_tolerance_deg"]):
+            raise MissionStop("target gimbal drifted before infrared fire")
+        self._health()
+        try:
+            accepted = self.blaster.fire(fire_type=self.fire_type, times=shots)
+        except Exception as error:
+            raise MissionStop(
+                f"infrared fire command failed; firing state unknown: {error}") from error
+        if not accepted:
+            raise MissionStop("infrared fire command was not accepted; firing state unknown")
+        height, width = frame.shape[:2]
+        return {"status": "fire_command_accepted", "color": item.color,
+                "shape": item.shape, "area_fraction": round(item.area / (width * height), 4),
+                "center": list(item.center), "shots_requested": shots, "aim_mode": aim_mode}
+
     def _aim(self, track_id, tracker, first_frame, first_item):
         config = self.settings["target_inspection"]
         frame = first_frame
         locked = 0
+        lock_mode = None
         lost = 0
         last_item = None
         for step_number in range(config["max_aim_steps"]):
@@ -156,6 +178,8 @@ class WallTargetInspector:
                        tracker.update(frame))
             item = visible.get(track_id)
             if item is None:
+                locked = 0
+                lock_mode = None
                 lost += 1
                 if lost >= 3:
                     return {"status": "target_lost"}
@@ -166,31 +190,21 @@ class WallTargetInspector:
             height, width = frame.shape[:2]
             error_x = item.center[0] / width - (.5 + config["aim_offset_x_fraction"])
             error_y = (.5 + config["aim_offset_y_fraction"]) - item.center[1] / height
-            if math.hypot(error_x, error_y) <= config["center_radius_fraction"]:
-                locked += 1
+            pitch, yaw, _ = self._angles()
+            centered = math.hypot(error_x, error_y) <= config["center_radius_fraction"]
+            pitch_limited = (pitch <= -20 + .1 and
+                             error_y < -config["center_radius_fraction"] and
+                             abs(error_x) <= config["center_radius_fraction"])
+            if centered or pitch_limited:
+                mode = "centered" if centered else "pitch_limit"
+                locked = locked + 1 if mode == lock_mode else 1
+                lock_mode = mode
                 if locked >= config["lock_frames"]:
-                    self._safe_status()
-                    pitch, yaw, _ = self._angles()
-                    expected_pitch, expected_yaw = self.commanded_angles
-                    if (abs(pitch - expected_pitch) > self.settings["gimbal"]["pitch_tolerance_deg"] or
-                            abs(_wrap_degrees(yaw - expected_yaw)) >
-                            self.settings["gimbal"]["angle_tolerance_deg"]):
-                        raise MissionStop("target gimbal drifted before infrared fire")
-                    self._health()
-                    try:
-                        accepted = self.blaster.fire(fire_type=self.fire_type, times=1)
-                    except Exception as error:
-                        raise MissionStop(
-                            f"infrared fire command failed; firing state unknown: {error}") from error
-                    if not accepted:
-                        raise MissionStop("infrared fire command was not accepted; firing state unknown")
-                    return {"status": "fire_command_accepted", "color": item.color,
-                            "shape": item.shape, "area_fraction": round(item.area / (width * height), 4),
-                            "center": list(item.center)}
+                    return self._fire(item, frame, 1 if centered else 2, mode)
                 _, frame = self._frame()
                 continue
             locked = 0
-            pitch, yaw, _ = self._angles()
+            lock_mode = None
             step = config["max_step_deg"]
             yaw_step = max(-step, min(step, error_x * config["camera_hfov_deg"]))
             pitch_step = max(-step, min(step, error_y * config["camera_vfov_deg"]))
