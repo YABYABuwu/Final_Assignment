@@ -144,6 +144,28 @@ class ReviewTests(unittest.TestCase):
             self.assertEqual(messages.count("Rear IR right detected (IO 1)"), 1)
             self.assertEqual(messages.count("Rear IR left detected (IO 0)"), 1)
 
+    def test_front_ir_detection_and_recovery_appear_in_review(self):
+        with tempfile.TemporaryDirectory() as temp:
+            run_dir = Path(temp) / "front_ir"
+            run_dir.mkdir()
+            (run_dir / "run_summary.json").write_text(json.dumps({
+                "front_ir_settings": {
+                    "right": {"id": 3, "port": 2, "active_io": 1},
+                    "left": {"id": 4, "port": 2, "active_io": 0},
+                },
+                "front_ir_recoveries": [{"side": "left", "status": "stopped",
+                                         "elapsed_s": .2, "distance_m": .01,
+                                         "reason": "rear IR blocks escape"}],
+            }), encoding="utf-8")
+            write_csv(run_dir / "adapter.csv", ["io_6", "io_8"], [
+                [1, 0.0, 0, 1], [2, 0.1, 1, 1], [3, 0.2, 0, 0],
+            ])
+            issues = RunStore(temp).load_run(run_dir.name)["issues"]
+            messages = [issue["message"] for issue in issues]
+            self.assertIn("Front IR right detected (IO 1)", messages)
+            self.assertIn("Front IR left detected (IO 0)", messages)
+            self.assertTrue(any("Front IR left recovery stopped" in message for message in messages))
+
 
 if __name__ == "__main__":
     unittest.main()

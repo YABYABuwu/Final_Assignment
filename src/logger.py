@@ -238,6 +238,8 @@ class SensorLogger:
                 "motion_settings": getattr(self, "motion_settings", None),
                 "rear_ir_settings": getattr(self, "rear_ir_settings", None),
                 "rear_ir_recoveries": getattr(self, "rear_ir_recoveries", []),
+                "front_ir_settings": getattr(self, "front_ir_settings", None),
+                "front_ir_recoveries": getattr(self, "front_ir_recoveries", []),
                 "logger_errors": errors,
                 "exploration": self.exploration_state,
             }

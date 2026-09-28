@@ -26,6 +26,7 @@ class ChassisController:
         self.gimbal_heading_offset = None
         self.commanded_lateral_m_s = 0.0
         self.rear_ir = None
+        self.front_ir = None
 
     def reset_heading(self):
         """Use the current heading as the reference on the next move_to call."""
@@ -65,9 +66,8 @@ class ChassisController:
             yaw = angle_error(observed + self.gimbal_heading_offset, 0)
         return position[0], position[1], yaw
 
-    def _recover_from_ir(self, side, attempt, period, deadline, abort_event, pause_if):
-        """Move away from active rear IRs for one bounded recovery attempt."""
-        bumper = self.rear_ir
+    def _recover_from_ir(self, bumper, side, attempt, period, deadline, abort_event, pause_if):
+        """Move away from active IRs for one bounded recovery attempt."""
         settings = bumper.settings
         forward = settings["recovery_speed_m_s"]
         origin = None
@@ -105,7 +105,7 @@ class ChassisController:
                 if (traveled_m >= settings["recovery_max_m"] or
                         commanded_m >= settings["recovery_max_m"]):
                     status = "limit"
-                    reason = "rear IR {} still blocked after one recovery attempt".format(side)
+                    reason = "{} IR {} still blocked after one recovery attempt".format(bumper.end, side)
                     return False
                 sample_time = state["sample_time"]
                 new_sample = sample_time != last_sample_time
@@ -122,12 +122,21 @@ class ChassisController:
                     time.sleep(period)
                     continue
                 direction, escape_x, escape_y = recovery_vector(
-                    sensors, forward, attempt=attempt)
+                    sensors, forward, attempt=attempt, end=bumper.end)
                 if direction == "clear":
                     # Hold still while confirming consecutive clear samples.
                     self.stop()
                     time.sleep(period)
                     continue
+                opposite = self.front_ir if bumper.end == "rear" else self.rear_ir
+                if opposite is not None and opposite.blocks_motion(escape_x, escape_y, 0):
+                    self.stop()
+                    if opposite.last_block == "waiting_data":
+                        clear_count = 0
+                        time.sleep(period)
+                        continue
+                    raise MissionStop("{} IR {} blocks {} recovery".format(
+                        opposite.end, opposite.last_block, bumper.end))
                 bumper.recovering = direction
                 self.chassis.drive_speed(x=escape_x, y=escape_y, z=0)
                 self.commanded_lateral_m_s = escape_y
@@ -165,7 +174,7 @@ class ChassisController:
         deadline = None if timeout is None else time.monotonic() + timeout
         previous = time.monotonic()
         target_yaw = yaw
-        recovery_attempts = 0
+        recovery_attempts = {"front": 0, "rear": 0}
         if yaw is not None:
             self.heading_reference = yaw
         try:
@@ -240,22 +249,25 @@ class ChassisController:
                 # using it as a deadband lets yaw drift during long slides.
                 turn = (self.pid_yaw.compute(heading_error, dt)
                         if target_yaw is not None else 0)
-                if self.rear_ir is not None and self.rear_ir.blocks_motion(vx_robot, vy_robot, turn):
+                blocked = [bumper for bumper in (self.front_ir, self.rear_ir)
+                           if bumper is not None and bumper.blocks_motion(vx_robot, vy_robot, turn)]
+                if blocked:
                     self.stop()
-                    if self.rear_ir.last_block != "waiting_data":
-                        side = self.rear_ir.last_block
-                        if recovery_attempts >= self.rear_ir.settings["recovery_max_attempts"]:
+                    bumper = next((item for item in blocked if item.last_block != "waiting_data"), None)
+                    if bumper is not None:
+                        side = bumper.last_block
+                        if recovery_attempts[bumper.end] >= bumper.settings["recovery_max_attempts"]:
                             raise MissionStop(
-                                "rear IR {} still blocked after {} recovery attempts".format(
-                                    side, recovery_attempts))
-                        recovery_attempts += 1
+                                "{} IR {} still blocked after {} recovery attempts".format(
+                                    bumper.end, side, recovery_attempts[bumper.end]))
+                        recovery_attempts[bumper.end] += 1
                         cleared = self._recover_from_ir(
-                            side, recovery_attempts, period, deadline, abort_event, pause_if)
-                        if (not cleared and recovery_attempts >=
-                                self.rear_ir.settings["recovery_max_attempts"]):
+                            bumper, side, recovery_attempts[bumper.end], period, deadline, abort_event, pause_if)
+                        if (not cleared and recovery_attempts[bumper.end] >=
+                                bumper.settings["recovery_max_attempts"]):
                             raise MissionStop(
-                                "rear IR {} still blocked after {} recovery attempts".format(
-                                    side, recovery_attempts))
+                                "{} IR {} still blocked after {} recovery attempts".format(
+                                    bumper.end, side, recovery_attempts[bumper.end]))
                     for pid in (self.pid_x, self.pid_y, self.pid_yaw):
                         pid.reset()
                     previous = time.monotonic()

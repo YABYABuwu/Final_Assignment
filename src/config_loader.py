@@ -14,7 +14,7 @@ def load_config(path=DEFAULT_CONFIG):
 
     if not isinstance(config, dict):
         raise ValueError("settings.yaml must contain a mapping")
-    for section in ("connection", "motion", "logging", "dashboard", "review", "mission", "exploration", "rear_ir"):
+    for section in ("connection", "motion", "logging", "dashboard", "review", "mission", "exploration", "rear_ir", "front_ir"):
         if not isinstance(config.get(section), dict):
             raise ValueError(f"missing config section: {section}")
     if config["connection"].get("type") not in ("ap", "sta", "rndis"):
@@ -85,47 +85,53 @@ def load_config(path=DEFAULT_CONFIG):
         if settings["save"] and not settings["enabled"]:
             raise ValueError(f"logging.streams.{name} cannot save when disabled")
 
-    rear_ir = config["rear_ir"]
-    if not isinstance(rear_ir.get("enabled"), bool):
-        raise ValueError("rear_ir.enabled must be true or false")
-    for side in ("right", "left"):
-        port = rear_ir.get(side)
-        if (not isinstance(port, dict) or type(port.get("id")) is not int or
-                not 1 <= port["id"] <= 6 or type(port.get("port")) is not int or
-                port["port"] not in (1, 2)):
-            raise ValueError(f"rear_ir.{side} needs id 1..6 and port 1 or 2")
-        active_io = port.get("active_io", rear_ir.get("active_io"))
-        if type(active_io) is not int or active_io not in (0, 1):
-            raise ValueError(f"rear_ir.{side}.active_io must be 0 or 1")
-    if ((rear_ir["right"]["id"], rear_ir["right"]["port"]) ==
-            (rear_ir["left"]["id"], rear_ir["left"]["port"])):
-        raise ValueError("rear_ir.right and rear_ir.left must use different ports")
-    if (type(rear_ir.get("max_age_s")) not in (int, float) or
-            not math.isfinite(rear_ir["max_age_s"]) or rear_ir["max_age_s"] <= 0):
-        raise ValueError("rear_ir.max_age_s must be positive")
-    if rear_ir["enabled"] and not streams.get("adapter", {}).get("enabled"):
-        raise ValueError("rear_ir needs logging.streams.adapter.enabled: true")
-    for name in ("recovery_speed_m_s", "recovery_max_m"):
-        value = rear_ir.get(name)
-        if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
-            raise ValueError(f"rear_ir.{name} must be a positive number")
-    if rear_ir["recovery_speed_m_s"] > motion["max_speed_m_s"]:
-        raise ValueError("rear_ir.recovery_speed_m_s cannot exceed motion.max_speed_m_s")
-    exploration_speed = config["exploration"].get("max_speed_m_s")
-    if (config["exploration"].get("enabled") and
-            type(exploration_speed) in (int, float) and math.isfinite(exploration_speed) and
-            rear_ir["recovery_speed_m_s"] > exploration_speed):
-        raise ValueError("rear_ir.recovery_speed_m_s cannot exceed exploration.max_speed_m_s")
-    step_m = config["exploration"].get("step_m")
-    if (type(step_m) in (int, float) and math.isfinite(step_m) and
-            rear_ir["recovery_max_m"] >= step_m / 2):
-        raise ValueError("rear_ir.recovery_max_m must be below half an exploration step")
-    clear_samples = rear_ir.get("recovery_clear_samples")
-    if type(clear_samples) is not int or not 1 <= clear_samples <= 20:
-        raise ValueError("rear_ir.recovery_clear_samples must be an integer from 1 to 20")
-    max_attempts = rear_ir.get("recovery_max_attempts")
-    if type(max_attempts) is not int or not 1 <= max_attempts <= 5:
-        raise ValueError("rear_ir.recovery_max_attempts must be an integer from 1 to 5")
+    used_ir_ports = {}
+    for end in ("rear", "front"):
+        key = end + "_ir"
+        ir = config[key]
+        if not isinstance(ir.get("enabled"), bool):
+            raise ValueError(f"{key}.enabled must be true or false")
+        for side in ("right", "left"):
+            port = ir.get(side)
+            if (not isinstance(port, dict) or type(port.get("id")) is not int or
+                    not 1 <= port["id"] <= 6 or type(port.get("port")) is not int or
+                    port["port"] not in (1, 2)):
+                raise ValueError(f"{key}.{side} needs id 1..6 and port 1 or 2")
+            active_io = port.get("active_io", ir.get("active_io"))
+            if (ir["enabled"] or active_io is not None) and (
+                    type(active_io) is not int or active_io not in (0, 1)):
+                raise ValueError(f"{key}.{side}.active_io must be 0 or 1")
+            if ir["enabled"]:
+                address = (port["id"], port["port"])
+                if address in used_ir_ports:
+                    raise ValueError(f"{key}.{side} shares an adapter port with {used_ir_ports[address]}")
+                used_ir_ports[address] = f"{key}.{side}"
+        if (type(ir.get("max_age_s")) not in (int, float) or
+                not math.isfinite(ir["max_age_s"]) or ir["max_age_s"] <= 0):
+            raise ValueError(f"{key}.max_age_s must be positive")
+        if ir["enabled"] and not streams.get("adapter", {}).get("enabled"):
+            raise ValueError(f"{key} needs logging.streams.adapter.enabled: true")
+        for name in ("recovery_speed_m_s", "recovery_max_m"):
+            value = ir.get(name)
+            if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
+                raise ValueError(f"{key}.{name} must be a positive number")
+        if ir["recovery_speed_m_s"] > motion["max_speed_m_s"]:
+            raise ValueError(f"{key}.recovery_speed_m_s cannot exceed motion.max_speed_m_s")
+        exploration_speed = config["exploration"].get("max_speed_m_s")
+        if (config["exploration"].get("enabled") and
+                type(exploration_speed) in (int, float) and math.isfinite(exploration_speed) and
+                ir["recovery_speed_m_s"] > exploration_speed):
+            raise ValueError(f"{key}.recovery_speed_m_s cannot exceed exploration.max_speed_m_s")
+        step_m = config["exploration"].get("step_m")
+        if (type(step_m) in (int, float) and math.isfinite(step_m) and
+                ir["recovery_max_m"] >= step_m / 2):
+            raise ValueError(f"{key}.recovery_max_m must be below half an exploration step")
+        clear_samples = ir.get("recovery_clear_samples")
+        if type(clear_samples) is not int or not 1 <= clear_samples <= 20:
+            raise ValueError(f"{key}.recovery_clear_samples must be an integer from 1 to 20")
+        max_attempts = ir.get("recovery_max_attempts")
+        if type(max_attempts) is not int or not 1 <= max_attempts <= 5:
+            raise ValueError(f"{key}.recovery_max_attempts must be an integer from 1 to 5")
 
     if config["mission"].get("enabled"):
         for name in ("position", "attitude"):

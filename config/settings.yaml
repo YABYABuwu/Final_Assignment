@@ -33,7 +33,7 @@ logging:
     esc:      {enabled: false, save: false, frequency_hz: 10}
     status:   {enabled: true, save: true, frequency_hz: 5}
     tof:      {enabled: true, save: true, frequency_hz: 20}
-    adapter:  {enabled: true, save: true, frequency_hz: 20} # IR กันชนหลัง; IO/ADC จาก sensor adaptor
+    adapter:  {enabled: true, save: true, frequency_hz: 20} # IR กันชนหน้า/หลัง; IO/ADC จาก sensor adaptor
     battery:  {enabled: true, save: true, frequency_hz: 5}
     gimbal:   {enabled: true, save: true, frequency_hz: 10}
 
@@ -53,13 +53,24 @@ review:
 
 rear_ir:
   enabled: true
-  right: {id: 3, port: 2, active_io: 0} # ขวา: io_6; ไฟดับ/ไม่พบวัตถุเป็น IO=0
+  right: {id: 3, port: 2, active_io: 1} # หลังขวา: io_1; พบวัตถุเป็น IO=0 ตามข้อมูลล่าสุด
   left: {id: 4, port: 1, active_io: 0}  # ซ้าย: polarity กลับด้านจากขวาตามการทดสอบล่าสุด
   max_age_s: 0.5          # ข้อมูลเก่ากว่านี้หยุดการถอย/สไลด์/หมุนจนได้ค่าใหม่
   recovery_speed_m_s: 0.08 # ครั้ง 1 หลบข้าง, ครั้ง 2 หน้า, ครั้ง 3 ทแยง; ทั้งคู่ไปหน้า
   recovery_max_m: 0.12    # ระยะหลบสูงสุดต่อหนึ่งครั้ง
   recovery_max_attempts: 3 # ตรวจซ้ำแล้วยังติด ให้ลองหลบได้สูงสุด 3 ครั้งต่อ move_to
   recovery_clear_samples: 3 # ต้องเห็น IO ว่างจาก callback ใหม่ต่อเนื่องก่อนเดินต่อ
+
+# รอสอบเทียบค่า IO ตอนบังเซนเซอร์หน้าทั้งสองข้างก่อนเปิดระบบกันชนหน้า
+front_ir:
+  enabled: true
+  right: {id: 1, port: 1, active_io: 0} # หน้าขวา: io_6; กำหนด 0/1 หลังสอบเทียบ
+  left: {id: 4, port: 2, active_io: 0}  # หน้าซ้าย: io_8; กำหนด 0/1 หลังสอบเทียบ
+  max_age_s: 0.5
+  recovery_speed_m_s: 0.08
+  recovery_max_m: 0.12
+  recovery_max_attempts: 3
+  recovery_clear_samples: 3
 
 mission:
   enabled: false          # เริ่มจาก false เพื่อไม่ให้รถวิ่งทันทีเมื่อทดสอบการเชื่อมต่อ

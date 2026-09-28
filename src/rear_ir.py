@@ -9,18 +9,20 @@ def adapter_index(sensor_id, port):
     return (sensor_id - 1) * 2 + (port - 1)
 
 
-def recovery_vector(sides, speed, attempt=1):
-    """Choose a staged escape for ambiguous single diagonal-IR detections."""
+def recovery_vector(sides, speed, attempt=1, end="rear"):
+    """Choose a staged escape away from a detected front or rear IR."""
+    longitudinal = speed if end == "rear" else -speed
+    prefix = "front" if end == "rear" else "back"
     right = sides["right"]["detected"] is True
     left = sides["left"]["detected"] is True
     if right and left:
-        return "forward", speed, 0.0
+        return ("forward" if end == "rear" else "backward"), longitudinal, 0.0
     if (right or left) and attempt == 2:
-        return "forward", speed, 0.0
+        return ("forward" if end == "rear" else "backward"), longitudinal, 0.0
     if (right or left) and attempt >= 3:
         diagonal = speed / math.sqrt(2.0)
-        return ("front_right", diagonal, diagonal) if left else (
-            "front_left", diagonal, -diagonal)
+        return (prefix + "_right", diagonal if end == "rear" else -diagonal, diagonal) if left else (
+            prefix + "_left", diagonal if end == "rear" else -diagonal, -diagonal)
     if left:
         return "slide_right", 0.0, speed
     if right:
@@ -28,10 +30,11 @@ def recovery_vector(sides, speed, attempt=1):
     return "clear", 0.0, 0.0
 
 
-class RearIRBumper:
-    def __init__(self, logger, settings):
+class IRBumper:
+    def __init__(self, logger, settings, end):
         self.logger = logger
         self.settings = settings
+        self.end = end
         self.last_block = None
         self.recovering = None
         self.events = []
@@ -54,12 +57,12 @@ class RearIRBumper:
             index = adapter_index(port["id"], port["port"])
             value = values[index] if index < len(values) else None
             valid = type(value) is int and value in (0, 1)
+            active_io = port.get("active_io", self.settings.get("active_io"))
             result["sides"][side] = {
                 "io": value if valid else None,
-                "detected": value == port.get("active_io", self.settings.get("active_io"))
-                if valid else None,
+                "detected": value == active_io if valid and active_io in (0, 1) else None,
             }
-            if not valid:
+            if not valid or active_io not in (0, 1):
                 result["state"] = "waiting_data"
         if (self.last_block == "waiting_data" and result["state"] == "ready") or (
                 self.last_block in ("right", "left") and
@@ -70,10 +73,11 @@ class RearIRBumper:
         return result
 
     def blocks_motion(self, x, y, z):
-        """Allow a forward escape; guard reversing, sideways travel and yaw."""
+        """Guard motion toward this bumper, sideways travel and yaw."""
         state = self.snapshot()
-        relevant = (("right", x < 0 or y > 0 or z != 0),
-                    ("left", x < 0 or y < 0 or z != 0))
+        toward = x < 0 if self.end == "rear" else x > 0
+        relevant = (("right", toward or y > 0 or z != 0),
+                    ("left", toward or y < 0 or z != 0))
         detected = [side for side, hazardous in relevant
                     if hazardous and state["sides"][side]["detected"] is True]
         if detected:
@@ -90,7 +94,18 @@ class RearIRBumper:
         """Expose the outcome to the live dashboard and saved run summary."""
         self.recovering = None
         self.events.append({
+            "end": self.end,
             "side": side, "status": status,
             "elapsed_s": round(time.time() - self.logger.start_time, 3),
             "distance_m": round(distance_m, 3), "reason": reason,
         })
+
+
+class RearIRBumper(IRBumper):
+    def __init__(self, logger, settings):
+        super().__init__(logger, settings, "rear")
+
+
+class FrontIRBumper(IRBumper):
+    def __init__(self, logger, settings):
+        super().__init__(logger, settings, "front")

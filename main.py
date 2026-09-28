@@ -10,7 +10,7 @@ from src.explorer import DFSExplorer
 from src.gimbal_control import ChassisRelativeGimbal
 from src.logger import SensorLogger
 from src.mission_stop import MissionStop
-from src.rear_ir import RearIRBumper
+from src.rear_ir import FrontIRBumper, RearIRBumper
 from src.slam import OccupancyGridSLAM, SlamWorker
 
 
@@ -70,6 +70,10 @@ def main():
             chassis.rear_ir = RearIRBumper(logger, config["rear_ir"])
             logger.rear_ir_settings = config["rear_ir"]
             logger.rear_ir_recoveries = chassis.rear_ir.events
+        if config["front_ir"]["enabled"]:
+            chassis.front_ir = FrontIRBumper(logger, config["front_ir"])
+            logger.front_ir_settings = config["front_ir"]
+            logger.front_ir_recoveries = chassis.front_ir.events
         if exploration_settings["enabled"]:
             slam_worker = SlamWorker(logger, slam_map, exploration_settings)
             explorer = DFSExplorer(chassis, ChassisRelativeGimbal(ep_robot.gimbal), logger, slam_map,
@@ -80,7 +84,7 @@ def main():
             dashboard = Dashboard(ep_robot, logger, config["dashboard"],
                                   slam_map=slam_map, slam_worker=slam_worker,
                                   explorer=explorer, motion_settings=logger.motion_settings,
-                                  rear_ir=chassis.rear_ir)
+                                  rear_ir=chassis.rear_ir, front_ir=chassis.front_ir)
             dashboard.start()
             host = config["dashboard"]["host"]
             port = config["dashboard"]["port"]

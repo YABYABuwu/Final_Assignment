@@ -16,7 +16,7 @@ PAGE = Path(__file__).resolve().parent.parent / "dashboard" / "index.html"
 
 class Dashboard:
     def __init__(self, robot, logger, settings, slam_map=None, slam_worker=None,
-                 explorer=None, motion_settings=None, rear_ir=None):
+                 explorer=None, motion_settings=None, rear_ir=None, front_ir=None):
         self.camera = robot.camera
         self.logger = logger
         self.settings = settings
@@ -25,6 +25,7 @@ class Dashboard:
         self.explorer = explorer
         self.motion_settings = motion_settings
         self.rear_ir = rear_ir
+        self.front_ir = front_ir
         self.running = threading.Event()
         self.frame_changed = threading.Condition()
         self.latest_jpeg = None
@@ -79,6 +80,7 @@ class Dashboard:
             "mission_status": self.mission_status,
             "motion_settings": self.motion_settings,
             "rear_ir": self.rear_ir.snapshot() if self.rear_ir is not None else {"enabled": False},
+            "front_ir": self.front_ir.snapshot() if self.front_ir is not None else {"enabled": False},
             "slam": self.slam_worker.status() if self.slam_worker is not None else None,
             "exploration": self.explorer.snapshot() if self.explorer is not None else None,
         }

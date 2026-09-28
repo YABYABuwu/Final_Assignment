@@ -7,11 +7,13 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
+import yaml
+
 from src.chassis import ChassisController
 from src.config_loader import load_config
 from src.logger import SensorLogger
 from src.mission_stop import MissionStop
-from src.rear_ir import RearIRBumper, adapter_index, recovery_vector
+from src.rear_ir import FrontIRBumper, RearIRBumper, adapter_index, recovery_vector
 
 
 class FakeAdapter:
@@ -99,6 +101,57 @@ class RearIRTests(unittest.TestCase):
             sides(False, True), .08, attempt=3)
         self.assertEqual(direction, "front_right")
         self.assertAlmostEqual(math.hypot(x_speed, y_speed), .08)
+
+    def test_front_ir_blocks_forward_and_recovery_moves_away(self):
+        settings = self.config["front_ir"].copy()
+        settings["right"] = {"id": 3, "port": 1, "active_io": 1}
+        settings["left"] = dict(settings["left"], active_io=0)
+        front = FrontIRBumper(self.logger, settings)
+        self.assertTrue(front.blocks_motion(.1, 0, 0))
+        self.assertEqual(front.last_block, "waiting_data")
+        io = [1] * 12
+        self.adapter.callback((io, [0] * 12))
+        self.assertTrue(front.blocks_motion(.1, 0, 0))
+        self.assertEqual(front.last_block, "right")
+        self.assertFalse(front.blocks_motion(-.1, 0, 0))
+        self.assertEqual(recovery_vector(front.snapshot()["sides"], .08, end="front"),
+                         ("slide_left", 0.0, -.08))
+        self.assertEqual(recovery_vector(front.snapshot()["sides"], .08, attempt=2,
+                                         end="front"), ("backward", -.08, 0.0))
+
+    def test_front_recovery_stops_when_rear_ir_blocks_escape(self):
+        settings = self.config["front_ir"].copy()
+        settings["right"] = {"id": 3, "port": 1, "active_io": 1}
+        settings["left"] = dict(settings["left"], active_io=0)
+        front = FrontIRBumper(self.logger, settings)
+        motion = self.config["motion"].copy()
+        motion["control_period_s"] = 0.001
+        chassis = ChassisController(self.robot, self.logger, motion)
+        chassis.front_ir = front
+        chassis.rear_ir = self.bumper
+        chassis.get_pose = lambda: (0, 0, 0)
+        io = [1] * 12
+        io[adapter_index(4, 1)] = 0
+        self.adapter.callback((io, [0] * 12))
+        with self.assertRaisesRegex(MissionStop, "rear IR left blocks front recovery"):
+            chassis.move_to(1, 0, yaw=0, timeout_s=.05)
+        self.assertFalse(any(command["x"] != 0 or command["y"] != 0
+                             for command in self.adapter.commands))
+        self.assertEqual(front.events[0]["status"], "stopped")
+
+    def test_config_rejects_same_adapter_port_for_front_and_rear(self):
+        settings = self.config.copy()
+        settings["front_ir"] = dict(settings["front_ir"], enabled=True,
+                                    right=dict(settings["front_ir"]["right"], active_io=1),
+                                    left=dict(settings["front_ir"]["left"], active_io=0))
+        path = Path(self.temp.name) / "duplicate.yaml"
+        path.write_text(yaml.safe_dump(settings), encoding="utf-8")
+        self.assertTrue(load_config(path)["front_ir"]["enabled"])
+        settings["rear_ir"] = dict(settings["rear_ir"],
+                                   right=dict(settings["rear_ir"]["right"], id=3, port=2))
+        path.write_text(yaml.safe_dump(settings), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "shares an adapter port"):
+            load_config(path)
 
     def test_missing_adapter_data_blocks_reverse_and_rotation(self):
         self.assertTrue(self.bumper.blocks_motion(-0.1, 0, 0))
