@@ -45,6 +45,18 @@ dashboard:
   max_fps: 20               # จำนวนภาพ JPEG สูงสุดที่ส่งให้หน้าเว็บต่อวินาที
   jpeg_quality: 70         # 1-100; ค่าสูงใช้แบนด์วิดท์และ CPU มากขึ้น
 
+image_processing:
+  enabled: true            # ตรวจป้ายสี/รูปทรงจาก camera stream เดียวกับ dashboard
+  mode: robust             # robust ทนต่อมุมเฉียง/ระยะชิด; classic ใช้เกณฑ์เดิม
+  detection_fps: 8         # Detection Thread ทำงานแยกจาก Camera Thread
+  stability_window: 5     # จำนวน frame ล่าสุดที่ใช้ยืนยันป้าย
+  stability_min_hits: 3   # พบสี+รูปทรงใกล้จุดเดิมอย่างน้อย 3 ใน 5 frame จึง confirmed
+  enable_undistort: true   # แก้ barrel distortion ด้วย calibration เริ่มต้นของ RoboMaster EP
+  min_area: 600            # ตัด contour รบกวนที่เล็กกว่า px² นี้
+  max_area: 250000         # ยอมรับป้ายระยะชิดที่กินพื้นที่ภาพมาก
+  morph_kernel_size: 3    # kernel สำหรับ close/open เพื่อลดรอยขาดและ noise
+  morph_iterations: 1
+
 review:
   host: 127.0.0.1          # หน้าอ่านข้อมูลย้อนหลัง เปิดเฉพาะคอมเครื่องนี้
   port: 8001               # URL: http://127.0.0.1:8001
@@ -53,24 +65,39 @@ review:
 
 rear_ir:
   enabled: true
-  right: {id: 3, port: 2, active_io: 0} # หลังขวา: io_1; พบวัตถุเป็น IO=0 ตามข้อมูลล่าสุด
-  left: {id: 4, port: 1, active_io: 0}  # ซ้าย: polarity กลับด้านจากขวาตามการทดสอบล่าสุด
+  right: {id: 3, port: 2, active_io: 1} # หลังขวา: io_6; active_io เป็น fallback หากปิด auto calibration
+  left: {id: 4, port: 1, active_io: 0}  # หลังซ้าย: io_7; active_io เป็น fallback หากปิด auto calibration
+  auto_calibrate_io: true # ตอนเริ่มโปรแกรมถือว่ารอบรถว่าง แล้วหา polarity ของแต่ละตัวอัตโนมัติ
+  calibration_samples: 10 # ใช้ข้อมูลใหม่อย่างน้อย 10 sample ก่อนอนุญาตให้รถเคลื่อน
+  calibration_min_consistency: 0.8 # ค่า idle ต้องเหมือนกันอย่างน้อย 80% เพื่อไม่ calibrate จาก noise
+  io_read_mode: "direct" # ใช้ get_io(ID, Port) ตลอด Run; ไม่สลับกลับ DDS stream กลางทาง
   max_age_s: 0.5          # ข้อมูลเก่ากว่านี้หยุดการถอย/สไลด์/หมุนจนได้ค่าใหม่
-  recovery_speed_m_s: 0.08 # ครั้ง 1 หลบข้าง, ครั้ง 2 หน้า, ครั้ง 3 ทแยง; ทั้งคู่ไปหน้า
+  recovery_speed_m_s: 0.08 # ครั้ง 1/3 หลบข้าง, ครั้ง 2 เดินหน้า; ทั้งคู่เจอให้เดินหน้า
   recovery_max_m: 0.12    # ระยะหลบสูงสุดต่อหนึ่งครั้ง
   recovery_max_attempts: 3 # ตรวจซ้ำแล้วยังติด ให้ลองหลบได้สูงสุด 3 ครั้งต่อ move_to
   recovery_clear_samples: 3 # ต้องเห็น IO ว่างจาก callback ใหม่ต่อเนื่องก่อนเดินต่อ
+  recovery_mode: "cardinal" # เดินทีละแกนเท่านั้น: ซ้าย/ขวา -> หลบข้าง, ทั้งคู่ -> เดินหน้า
+  forward_tof_clear_mm: 250 # ระยะ ToF ด้านหน้าที่ถือว่าโล่งและอนุญาตให้เดินหน้าหลบได้
+  direct_io_fallback: true  # หาก DDS ส่ง IO=0 ทุกช่องหลังเปลี่ยนแบต ให้อ่าน ID/Port โดยตรง
+  direct_fallback_cache_s: 0.2 # จำกัดความถี่ synchronous SDK read ไม่ให้รบกวน telemetry
 
-# รอสอบเทียบค่า IO ตอนบังเซนเซอร์หน้าทั้งสองข้างก่อนเปิดระบบกันชนหน้า
+# Front/Rear calibrate polarity ใหม่ทุกครั้งที่เริ่มโปรแกรมหลังเปลี่ยนแบต
 front_ir:
   enabled: true
-  right: {id: 1, port: 1, active_io: 0} # หน้าขวา: io_6; กำหนด 0/1 หลังสอบเทียบ
-  left: {id: 4, port: 2, active_io: 0}  # หน้าซ้าย: io_8; กำหนด 0/1 หลังสอบเทียบ
+  right: {id: 1, port: 1, active_io: 1} # หน้าขวา: io_1; fallback
+  left: {id: 4, port: 2, active_io: 0}  # หน้าซ้าย: io_8; fallback
+  auto_calibrate_io: true
+  calibration_samples: 10
+  calibration_min_consistency: 0.8
+  io_read_mode: "direct"
   max_age_s: 0.5
   recovery_speed_m_s: 0.08
   recovery_max_m: 0.12
   recovery_max_attempts: 3
   recovery_clear_samples: 3
+  recovery_mode: "cardinal" # เดินทีละแกนเท่านั้น: ซ้าย/ขวา -> หลบข้าง, ทั้งคู่ -> ถอยหลัง
+  direct_io_fallback: true
+  direct_fallback_cache_s: 0.2
 
 mission:
   enabled: false          # เริ่มจาก false เพื่อไม่ให้รถวิ่งทันทีเมื่อทดสอบการเชื่อมต่อ
@@ -94,7 +121,7 @@ exploration:
   emergency_stop_distance_m: 0.20 # ระยะกึ่งกลาง chassis ถึงกำแพงที่หยุดระหว่างเดินตามกริด
   alignment:
     enabled: true         # จัดตำแหน่งจากกำแพงที่เลือกหลังสแกนครบ 4 ทิศ
-    wall_distance_m: 0.20 # เป้าหมายเมื่อมีผนังฝั่งเดียว; สองฝั่งให้ระยะเท่ากัน
+    wall_distance_m: 0.28 # เป้าหมายเมื่อมีผนังฝั่งเดียว; สองฝั่งให้ระยะเท่ากัน
     tolerance_m: 0.03     # ไม่ขยับถ้าคลาดไม่เกิน 3 ซม.
     max_shift_m: 0.10     # ระยะขยับสูงสุดต่อช่วง; วัดผนังใหม่ก่อนขยับช่วงถัดไป
   max_nodes: 120           # จำกัดจำนวนช่องที่ DFS จะเข้าเยี่ยมต่อรอบ
@@ -115,21 +142,35 @@ exploration:
     yaw_speed_deg_s: 120
     angle_tolerance_deg: 3 # tolerance ของ yaw
     pitch_tolerance_deg: 8 # telemetry เปลี่ยนตาม yaw สูงสุดราว 7.1°; yaw ยังใช้ tolerance 3°
+    movement_angle_tolerance_deg: 5 # ขณะรถวิ่งยอมให้กิมบอลคลาดเพิ่มจากแรงสั่น/PID
+    movement_alignment_miss_samples: 3 # ต้องคลาดต่อเนื่องหลาย sample ก่อนหยุด mission
   target_inspection:
     enabled: true           # ตรวจทุกขอบที่เป็นกำแพงหนึ่งครั้งขณะ DFS หยุดนิ่ง
-    pitch_deg: -20.0        # มุมก้มที่คำสั่งกิมบอลแสดงใน pitch_ground; ตรวจทิศจริงก่อนยิง
+    pitch_deg: -20.0        # มุมก้มกิมบอล -20.0° เพื่อส่องหาเป้าหมายระดับต่ำบนผนัง
     selected: all           # all หรือรายการ เช่น [red:circle, blue:vertical]
     min_area_fraction: 0.02 # ขั้นต่ำ 2% ของภาพ; 360p ประมาณ 4608 px² มากกว่าเกณฑ์เดิม
     confirm_frames: 3       # ต้องเห็นสี/รูปร่างเดิมต่อเนื่องก่อนเล็ง
     lock_frames: 3          # ยืนยันว่าเป้ายังอยู่ในภาพต่อเนื่องที่มุมเล็งที่ดีที่สุดก่อนยิง 2 นัด
+    lock_max_misses: 3      # ยอมให้ Detection หลุดชั่วคราว แต่ไม่นับเป็นการยืนยัน
+    target_lost_frames: 5   # หลุดระหว่างเล็งครบจำนวนนี้จึงกลับไปมุมที่เห็น Shape เดิมดีที่สุด
+    reacquire_frames: 6     # จำนวนเฟรมสำหรับหา Color+Shape เดิมก่อนยกเลิกการยิง
     center_radius_fraction: 0.04
     aim_offset_x_fraction: 0.0 # ปรับจุดเล็ง IR เทียบกึ่งกลางภาพหลังทดลองระยะใกล้
     aim_offset_y_fraction: 0.0
     max_aim_steps: 12       # จำนวนคำสั่งกิมบอลสูงสุดต่อเป้า ไม่ใช่ timeout
-    max_targets_per_wall: 16 # จำนวนเป้าสูงสุดที่ตรวจต่อกำแพงหนึ่งด้าน
-    max_step_deg: 6.0       # จำกัดการปรับหัวแต่ละครั้ง
+    max_targets_per_wall: 2 # จำนวนเป้าสูงสุดที่ตรวจต่อกำแพงหนึ่งด้าน
+    max_step_deg: 4.5       # จำกัดการปรับหัวแต่ละครั้ง ลดลงไม่ให้เป้าหลุดกรอบภาพ
     camera_hfov_deg: 90.0   # ค่าเริ่มทดลอง ต้องสอบเทียบภาพจริง
     camera_vfov_deg: 60.0
+    shots_per_target: 2     # ยิง IR 2 นัดต่อเป้าหมายที่ยืนยันแล้ว
+    fire_settle_s: 1.0      # หน่วงเวลารอให้ยิงครบทุกนัดก่อนกิมบอลขยับ (วินาที)
+    aim_settle_s: 0.45      # หน่วงเวลารอให้ภาพนิ่งหลังกิมบอลขยับก่อนอ่านเฟรม (วินาที)
+    scan_yaw_speed_deg_s: 50 # ความเร็วหมุนกิมบอลไปที่ผนัง (deg/s) ลดลงเพื่อไม่ให้ภาพ/หุ่นสั่น
+    aim_yaw_speed_deg_s: 25  # ความเร็วปรับกิมบอลละเอียดขณะเล็งเป้า (deg/s) ให้นุ่มนวลไม่กระตุก
+    search_frames: 5        # จำนวนเฟรมสูงสุดที่สุ่มตรวจหาเป้า (ยืนยันเป้าเมื่อพบต่อเนื่อง >= confirm_frames)
+    adaptive_pitch: true    # ปรับมุมก้มอัตโนมัติตามระยะ ToF ถ้าอยู่ใกล้กำแพงเกินไป
+    close_range_threshold_mm: 180 # ระยะที่ถือว่าอยู่ใกล้กำแพงมาก (18 ซม.)
+    close_pitch_deg: -20.0  # มุมก้มเมื่ออยู่ใกล้กำแพงมาก
     fire_mode: infrared
   map:
     resolution_m: 0.05

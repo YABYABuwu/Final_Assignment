@@ -7,6 +7,7 @@ import cv2
 from img_processing.detector import (
     ColorShapeDetector,
     detect,
+    get_camera_calibration,
     classify_shape_classic,
     classify_shape_robust,
     color_mask,
@@ -70,6 +71,21 @@ class TestImageProcessing(unittest.TestCase):
     def test_undistort_function(self):
         out = undistort_frame(self.img)
         self.assertEqual(out.shape, self.img.shape)
+
+    def test_camera_calibration_scales_for_dashboard_540p(self):
+        camera_matrix, _ = get_camera_calibration(960, 540)
+        self.assertAlmostEqual(camera_matrix[0, 0], 480.0)
+        self.assertAlmostEqual(camera_matrix[1, 1], 480.0)
+        self.assertAlmostEqual(camera_matrix[0, 2], 480.0)
+        self.assertAlmostEqual(camera_matrix[1, 2], 270.0)
+
+    def test_detector_can_annotate_detected_signs(self):
+        cv2.circle(self.img, (250, 360), 70, (40, 40, 240), -1)
+        detector = ColorShapeDetector(mode="robust", enable_undistort=False)
+        detections, _, processed = detector.detect(self.img)
+        annotated = detector.annotate(processed, detections)
+        self.assertEqual(annotated.shape, self.img.shape)
+        self.assertFalse(np.array_equal(annotated, processed))
 
 
 if __name__ == "__main__":

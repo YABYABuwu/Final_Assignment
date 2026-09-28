@@ -638,7 +638,11 @@ class DFSExplorer:
                     continue
                 body_yaw = self._current_yaw()
                 world_yaw = self.base_pose[2] + math.degrees(math.atan2(delta[1], delta[0]))
-                result = self.target_inspector.inspect(node, delta, world_yaw, body_yaw)
+                range_mm = fresh_check.get("range_mm")
+                try:
+                    result = self.target_inspector.inspect(node, delta, world_yaw, body_yaw, range_mm=range_mm)
+                except TypeError:
+                    result = self.target_inspector.inspect(node, delta, world_yaw, body_yaw)
             except MissionStop as error:
                 with self.lock:
                     self.wall_inspections[key]["status"] = "stopped"
@@ -648,7 +652,46 @@ class DFSExplorer:
             with self.lock:
                 self.wall_inspections[key] = result
             self.map.set_exploration_state(self.snapshot())
+            for target_res in result.get("targets", []):
+                if target_res.get("status") == "fire_command_accepted":
+                    self._save_target_record(node, delta, target_res)
         self._set_status("exploring")
+
+    def _save_target_record(self, cell, delta, target_res):
+        try:
+            from src.target_marker import (
+                load_target_document, next_target_id, build_target_record, save_target_record
+            )
+            from pathlib import Path
+            project_dir = Path(__file__).resolve().parent.parent
+            targets_file = project_dir / "data" / "targets.json"
+            doc = load_target_document(targets_file)
+            tid = next_target_id(doc["targets"])
+            detection_dict = {
+                "color": target_res.get("color"),
+                "shape": target_res.get("shape"),
+                "center_px": target_res.get("center", [0, 0]),
+                "center_offset_norm": [0.0, 0.0],
+                "area_px2": target_res.get("area_fraction", 0.0) * (640 * 360),
+                "stability_hits": self.settings.get("target_inspection", {}).get("confirm_frames", 3),
+                "stability_required": self.settings.get("target_inspection", {}).get("confirm_frames", 3),
+            }
+            pose = self._motion_pose()
+            gimbal_sample = self._gimbal_sample()
+            gimbal = (gimbal_sample[1], gimbal_sample[0], 0, 0) if gimbal_sample else (0, 0, 0, 0)
+            # In RoboMaster NED frame: delta (0, -1) is -90 deg (left wall = y+),
+            # and delta (0, 1) is +90 deg (right wall = y-).
+            delta_to_side = {(1, 0): "x+", (0, -1): "y+", (-1, 0): "x-", (0, 1): "y-"}
+            side = delta_to_side.get(tuple(delta))
+            rec = build_target_record(
+                tid, cell, detection_dict, pose=pose, gimbal=gimbal, side=side,
+                fired=True, fire_times=target_res.get("shots_requested", 2),
+            )
+            save_target_record(targets_file, rec, replace=False)
+            print(f"[explorer] Auto-marked and saved target {tid} ({rec['color']} {rec['shape']}) at cell {cell} to {targets_file}")
+        except Exception as e:
+            import sys
+            print(f"[explorer] Warning: failed to auto-save target: {e}", file=sys.stderr)
 
     def _set_target_progress(self, progress):
         with self.lock:
@@ -734,8 +777,11 @@ class DFSExplorer:
 
         stopped = {}
         sensor_yaw_offset = float(self.settings["sensor"]["yaw_offset_deg"])
+        alignment_misses = 0
+        alignment_last_timestamp = None
 
         def stop_if(pose):
+            nonlocal alignment_misses, alignment_last_timestamp
             previous_status = self.status
             waiting = False
             while True:
@@ -759,15 +805,33 @@ class DFSExplorer:
             if waiting:
                 self._set_status(previous_status)
             target_yaw = _wrap_degrees(world_yaw - pose[2] - sensor_yaw_offset)
-            tolerance = self.settings["gimbal"]["angle_tolerance_deg"]
+            tolerance = self.settings["gimbal"].get(
+                "movement_angle_tolerance_deg",
+                self.settings["gimbal"]["angle_tolerance_deg"],
+            )
             pitch_tolerance = self.settings["gimbal"]["pitch_tolerance_deg"]
-            if (abs(_wrap_degrees(target_yaw - scan_yaw)) > tolerance or
-                    abs(self.settings["gimbal"]["pitch_deg"] - scan_pitch) > pitch_tolerance):
-                raise MissionStop(
-                    "movement ToF alignment lost: yaw target {:.1f}, actual {:.1f}; "
-                    "pitch target {:.1f}, actual {:.1f}".format(
-                        target_yaw, scan_yaw,
-                        self.settings["gimbal"]["pitch_deg"], scan_pitch))
+            yaw_error = abs(_wrap_degrees(target_yaw - scan_yaw))
+            pitch_error = abs(self.settings["gimbal"]["pitch_deg"] - scan_pitch)
+            if yaw_error > tolerance or pitch_error > pitch_tolerance:
+                # Count only fresh telemetry, not repeated reads of one sample.
+                if angle_timestamp != alignment_last_timestamp:
+                    alignment_misses += 1
+                    alignment_last_timestamp = angle_timestamp
+                required_misses = self.settings["gimbal"].get(
+                    "movement_alignment_miss_samples", 3
+                )
+                if alignment_misses >= required_misses:
+                    raise MissionStop(
+                        "movement ToF alignment lost for {} samples: "
+                        "yaw target {:.1f}, actual {:.1f}, error {:.2f}; "
+                        "pitch target {:.1f}, actual {:.1f}, error {:.2f}".format(
+                            alignment_misses, target_yaw, scan_yaw, yaw_error,
+                            self.settings["gimbal"]["pitch_deg"], scan_pitch,
+                            pitch_error))
+                # Ignore a short telemetry spike; a later aligned sample resets it.
+                return False
+            alignment_misses = 0
+            alignment_last_timestamp = angle_timestamp
             scan_distance = self.map._range_value(tof[0])
             if scan_distance is None:
                 return False
@@ -834,6 +898,14 @@ class DFSExplorer:
         self.slam_worker = slam_worker
         try:
             self._set_status("starting")
+            if self.settings.get("target_inspection", {}).get("enabled", True):
+                try:
+                    from src.target_marker import init_target_document
+                    from pathlib import Path
+                    targets_file = Path(__file__).resolve().parent.parent / "data" / "targets.json"
+                    init_target_document(targets_file, backup=True)
+                except Exception as _e:
+                    print(f"[explorer] Notice: targets file reset skipped: {_e}")
             slam_worker.wait_ready()
             self._prepare_gimbal()
             pose = self.map.pose

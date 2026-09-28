@@ -102,6 +102,55 @@ class RearIRTests(unittest.TestCase):
         self.assertEqual(direction, "front_right")
         self.assertAlmostEqual(math.hypot(x_speed, y_speed), .08)
 
+    def test_diagonal_recovery_moves_forward_and_away(self):
+        def sides(right, left):
+            return {"right": {"detected": right}, "left": {"detected": left}}
+
+        # Rear left detected -> forward and right (both moves forward and away from left)
+        direction, vx, vy = recovery_vector(sides(False, True), .08, end="rear", mode="diagonal", forward_clear=True)
+        self.assertEqual(direction, "front_right")
+        self.assertGreater(vx, 0)
+        self.assertGreater(vy, 0)
+
+        # Rear right detected -> forward and left (both moves forward and away from right)
+        direction, vx, vy = recovery_vector(sides(True, False), .08, end="rear", mode="diagonal", forward_clear=True)
+        self.assertEqual(direction, "front_left")
+        self.assertGreater(vx, 0)
+        self.assertLess(vy, 0)
+
+        # Both sides detected -> forward straight
+        direction, vx, vy = recovery_vector(sides(True, True), .08, end="rear", mode="diagonal", forward_clear=True)
+        self.assertEqual(direction, "forward")
+        self.assertAlmostEqual(vx, .08)
+        self.assertEqual(vy, 0.0)
+
+        # When forward is blocked (e.g. wall in front), falls back to pure lateral slide
+        direction, vx, vy = recovery_vector(sides(False, True), .08, end="rear", mode="diagonal", forward_clear=False)
+        self.assertEqual(direction, "slide_right")
+        self.assertEqual(vx, 0.0)
+        self.assertGreater(vy, 0)
+
+        direction, vx, vy = recovery_vector(sides(True, False), .08, end="rear", mode="diagonal", forward_clear=False)
+        self.assertEqual(direction, "slide_left")
+        self.assertEqual(vx, 0.0)
+        self.assertLess(vy, 0)
+
+    def test_forward_first_recovery_mode(self):
+        def sides(right, left):
+            return {"right": {"detected": right}, "left": {"detected": left}}
+
+        # Attempt 1: straight forward
+        direction, vx, vy = recovery_vector(sides(False, True), .08, attempt=1, end="rear", mode="forward_first", forward_clear=True)
+        self.assertEqual(direction, "forward")
+        self.assertAlmostEqual(vx, .08)
+        self.assertEqual(vy, 0.0)
+
+        # Attempt 2: diagonal escape
+        direction, vx, vy = recovery_vector(sides(False, True), .08, attempt=2, end="rear", mode="forward_first", forward_clear=True)
+        self.assertEqual(direction, "front_right")
+        self.assertGreater(vx, 0)
+        self.assertGreater(vy, 0)
+
     def test_front_ir_blocks_forward_and_recovery_moves_away(self):
         settings = self.config["front_ir"].copy()
         settings["right"] = {"id": 3, "port": 1, "active_io": 1}

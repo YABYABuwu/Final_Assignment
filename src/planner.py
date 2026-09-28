@@ -146,17 +146,20 @@ class GridMap:
 
         return True
 
-    def find_shooting_standpoints(self, target_node, max_distance=2, allow_same_cell=False, default_same_cell_yaw=0.0):
+    def find_shooting_standpoints(self, target_node, max_distance=2, allow_same_cell=False,
+                                  default_same_cell_yaw=0.0, target_side=None):
         """Find valid accessible cells within <= max_distance with line of sight to target.
 
         If allow_same_cell is True, the target's own cell is also a valid standpoint (distance 0).
+        If target_side is specified ('x+', 'x-', 'y+', 'y-'), standpoints must face directly
+        towards that target's wall rather than an orthogonal wall.
 
         Returns list of dicts:
             {
                 'standpoint': (x, y),
                 'target': (tx, ty),
                 'distance_cells': int,
-                'gimbal_yaw_deg': float (relative to robot chassis, assuming hold_heading)
+                'gimbal_yaw_deg': float (relative to robot chassis in RoboMaster frame)
             }
         """
         standpoints = []
@@ -170,7 +173,14 @@ class GridMap:
                 "gimbal_yaw_deg": default_same_cell_yaw,
             })
 
-        cardinals = [(1, 0), (-1, 0), (0, 1), (0, -1)]
+        # Only look at standpoints that directly face the target's wall
+        side_to_cardinal = {
+            "x+": [(1, 0)],
+            "x-": [(-1, 0)],
+            "y+": [(0, 1)],
+            "y-": [(0, -1)],
+        }
+        cardinals = side_to_cardinal.get(target_side, [(1, 0), (-1, 0), (0, 1), (0, -1)])
 
         for dx, dy in cardinals:
             for dist in range(1, max_distance + 1):
@@ -180,13 +190,14 @@ class GridMap:
                     # Direction vector from standpoint to target
                     vec_x = target_node[0] - sp[0]
                     vec_y = target_node[1] - sp[1]
-                    yaw_deg = math.degrees(math.atan2(vec_y, vec_x))
+                    # RoboMaster Gimbal is Clockwise Positive: negate atan2 so +y (left) is -90 deg
+                    yaw_deg = -math.degrees(math.atan2(vec_y, vec_x))
 
                     standpoints.append({
                         "standpoint": sp,
                         "target": target_node,
                         "distance_cells": dist,
-                        "gimbal_yaw_deg": yaw_deg,
+                        "gimbal_yaw_deg": yaw_deg,  # grid-frame angle; add base_pose[2] for world frame
                     })
 
         return standpoints
@@ -336,19 +347,23 @@ class MultiTargetPlanner:
                 color = "red"
                 side = None
 
+            # RoboMaster Gimbal convention: 0 is front (x+), 180 is back (x-),
+            # -90 is left (y+), +90 is right (y-).
             side_map = {
                 "x+": 0.0, "front": 0.0, "forward": 0.0,
                 "x-": 180.0, "back": 180.0, "backward": 180.0,
-                "y+": 90.0, "left": 90.0,
-                "y-": -90.0, "right": -90.0,
+                "y+": -90.0, "left": -90.0,
+                "y-": 90.0, "right": 90.0,
             }
             target_yaw = side_map.get(side, 0.0) if side else 0.0
             parsed_targets.append({
                 "id": target_id,
                 "pos": pos,
                 "color": color,
+                "shape": t.get("shape", "circle") if isinstance(t, dict) else "circle",
                 "side": side,
                 "yaw_deg": target_yaw,
+                "observation": t.get("observation", {}) if isinstance(t, dict) else {},
             })
 
         # Collect candidate shooting standpoints for each target
@@ -357,7 +372,8 @@ class MultiTargetPlanner:
             standpoints = self.grid_map.find_shooting_standpoints(
                 t["pos"], max_distance=self.max_shooting_dist,
                 allow_same_cell=self.allow_same_cell,
-                default_same_cell_yaw=t["yaw_deg"]
+                default_same_cell_yaw=t["yaw_deg"],
+                target_side=t.get("side"),
             )
             if not standpoints:
                 # Target not visible from any reachable open cell
@@ -381,50 +397,98 @@ class MultiTargetPlanner:
         best_standpoints = None
 
         # Search optimal permutation of targets
-        target_permutations = list(itertools.permutations(parsed_targets))
+        if len(parsed_targets) <= 7:
+            target_permutations = list(itertools.permutations(parsed_targets))
+            for perm in target_permutations:
+                # For each permutation, enumerate all combinations of standpoints
+                # (one per target) and pick the globally optimal combination.
+                candidate_lists = [target_candidates[t["id"]] for t in perm]
+                best_combo_cost = float("inf")
+                best_combo_sp = None
 
-        for perm in target_permutations:
-            # For each permutation, greedily or combinatorially pick best standpoints
-            # Since candidate count per target is small (usually 1-4), find best combination
-            current_cost = 0
-            current_pos = start
-            selected_sp = []
-            valid_perm = True
+                for combo in itertools.product(*candidate_lists):
+                    current_cost = 0
+                    current_pos = start
+                    valid_combo = True
+                    for t, sp_info in zip(perm, combo):
+                        path = get_cached_path(current_pos, sp_info["standpoint"])
+                        if path is None:
+                            valid_combo = False
+                            break
+                        current_cost += len(path) - 1
+                        current_pos = sp_info["standpoint"]
+                    if not valid_combo:
+                        continue
+                    if return_to_start:
+                        return_path = get_cached_path(current_pos, start)
+                        if return_path is None:
+                            continue
+                        current_cost += len(return_path) - 1
+                    if current_cost < best_combo_cost:
+                        best_combo_cost = current_cost
+                        best_combo_sp = [{**t, **sp_info} for t, sp_info in zip(perm, combo)]
 
-            for t in perm:
-                # Find standpoint that minimizes distance from current_pos
-                best_sp_for_t = None
-                best_sp_cost = float("inf")
-
-                for sp_info in target_candidates[t["id"]]:
-                    path = get_cached_path(current_pos, sp_info["standpoint"])
-                    if path is not None:
-                        cost = len(path) - 1
-                        if cost < best_sp_cost:
-                            best_sp_cost = cost
-                            best_sp_for_t = sp_info
-
-                if best_sp_for_t is None:
-                    valid_perm = False
-                    break
-
-                current_cost += best_sp_cost
-                current_pos = best_sp_for_t["standpoint"]
-                selected_sp.append({**t, **best_sp_for_t})
-
-            if not valid_perm:
-                continue
-
-            if return_to_start:
-                return_path = get_cached_path(current_pos, start)
-                if return_path is None:
+                if best_combo_sp is None:
                     continue
-                current_cost += len(return_path) - 1
 
-            if current_cost < best_cost:
-                best_cost = current_cost
-                best_sequence = perm
-                best_standpoints = selected_sp
+                if best_combo_cost < best_cost:
+                    best_cost = best_combo_cost
+                    best_sequence = perm
+                    best_standpoints = best_combo_sp
+        else:
+            # Scalable greedy nearest-neighbor solver for large target sets (>7 targets)
+            for first_idx in range(min(5, len(parsed_targets))):
+                remaining = list(parsed_targets)
+                curr_target = remaining.pop(first_idx)
+                # Pick best initial standpoint from start
+                best_init_sp = None
+                best_init_cost = float("inf")
+                for sp_info in target_candidates[curr_target["id"]]:
+                    p = get_cached_path(start, sp_info["standpoint"])
+                    if p is not None and (len(p) - 1) < best_init_cost:
+                        best_init_cost = len(p) - 1
+                        best_init_sp = sp_info
+
+                if best_init_sp is None:
+                    continue
+
+                current_cost = best_init_cost
+                current_pos = best_init_sp["standpoint"]
+                selected_sp = [{**curr_target, **best_init_sp}]
+                valid_tour = True
+
+                while remaining:
+                    best_next = None
+                    best_next_sp = None
+                    best_next_cost = float("inf")
+                    for cand in remaining:
+                        for sp_info in target_candidates[cand["id"]]:
+                            p = get_cached_path(current_pos, sp_info["standpoint"])
+                            if p is not None and (len(p) - 1) < best_next_cost:
+                                best_next_cost = len(p) - 1
+                                best_next = cand
+                                best_next_sp = sp_info
+                    if best_next is None or best_next_sp is None:
+                        valid_tour = False
+                        break
+                    remaining.remove(best_next)
+                    current_cost += best_next_cost
+                    current_pos = best_next_sp["standpoint"]
+                    selected_sp.append({**best_next, **best_next_sp})
+
+                if not valid_tour:
+                    continue
+
+                if return_to_start:
+                    ret_path = get_cached_path(current_pos, start)
+                    if ret_path is None:
+                        continue
+                    current_cost += len(ret_path) - 1
+
+                if current_cost < best_cost:
+                    best_cost = current_cost
+                    best_sequence = tuple(selected_sp)
+                    best_standpoints = selected_sp
 
         if best_sequence is None:
             return {"success": False, "error": "No valid route found connecting all targets."}
@@ -443,11 +507,14 @@ class MultiTargetPlanner:
             shooting_actions.append({
                 "target_id": item["id"],
                 "target_pos": item["pos"],
-                "target_color": item["color"],
+                "target_color": item.get("color", "red"),
+                "target_shape": item.get("shape", "circle"),
+                "side": item.get("side"),
                 "standpoint": sp,
                 "gimbal_yaw_deg": item["gimbal_yaw_deg"],
                 "distance_cells": item["distance_cells"],
                 "path_step_index": len(full_path) - 1,
+                "target_pitch_deg": item.get("observation", {}).get("gimbal_pitch_deg", 0.0),
             })
             current_pos = sp
 
@@ -490,7 +557,7 @@ class MultiTargetPlanner:
 
         return {
             "success": True,
-            "target_order": [t["id"] for t in best_sequence],
+            "target_order": [t["id"] if isinstance(t, dict) else t for t in best_sequence],
             "shooting_plan": shooting_actions,
             "full_path": full_path,
             "waypoints": waypoints,
@@ -508,39 +575,40 @@ def plot_mission_map(grid_map, plan, output_path=None, title="Round 2 Shortest P
     ax.set_aspect("equal")
 
     # Determine bounds from grid cells
+    # Oriented so Forward (+X) is UP and Lateral (+Y) is RIGHT, matching exploration map
     xs = [c[0] for c in grid_map.cells]
     ys = [c[1] for c in grid_map.cells]
     min_x, max_x = min(xs, default=0), max(xs, default=5)
     min_y, max_y = min(ys, default=0), max(ys, default=5)
 
-    # Set grid view margins
+    # Set grid view margins: Horizontal is Y, Vertical is X
     margin = 1
-    ax.set_xlim(min_x - margin, max_x + margin + 1)
-    ax.set_ylim(min_y - margin, max_y + margin + 1)
+    ax.set_xlim(min_y - margin, max_y + margin + 1)
+    ax.set_ylim(min_x - margin, max_x + margin + 1)
 
-    # Draw cell tiles
+    # Draw cell tiles (plot_x = gy, plot_y = gx)
     for (gx, gy), sides in grid_map.cells.items():
         is_visited = (gx, gy) in grid_map.visited
         bg_color = "#e8f4f8" if is_visited else "#f5f5f5"
-        rect = Rectangle((gx, gy), 1, 1, facecolor=bg_color, edgecolor="#e0e0e0", linewidth=0.5)
+        rect = Rectangle((gy, gx), 1, 1, facecolor=bg_color, edgecolor="#e0e0e0", linewidth=0.5)
         ax.add_patch(rect)
-        ax.text(gx + 0.1, gy + 0.1, f"({gx},{gy})", fontsize=7, color="#888888")
+        ax.text(gy + 0.1, gx + 0.1, f"({gx},{gy})", fontsize=7, color="#888888")
 
-        # Draw walls
-        # x+: right edge (gx+1, gy) to (gx+1, gy+1)
-        # x-: left edge (gx, gy) to (gx, gy+1)
-        # y+: top edge (gx, gy+1) to (gx+1, gy+1)
-        # y-: bottom edge (gx, gy) to (gx+1, gy)
+        # Draw walls:
+        # x+: top edge (gx+1) from (gy, gx+1) to (gy+1, gx+1) - Forward wall
+        # x-: bottom edge (gx) from (gy, gx) to (gy+1, gx) - Back wall
+        # y+: right edge (gy+1) from (gy+1, gx) to (gy+1, gx+1) - Right wall
+        # y-: left edge (gy) from (gy, gx) to (gy, gx+1) - Left wall
         wall_color = "#111111"
         wall_width = 3.0
         open_color = "#70c070"
         open_width = 1.0
 
         borders = [
-            ("x+", [(gx + 1, gy), (gx + 1, gy + 1)]),
-            ("x-", [(gx, gy), (gx, gy + 1)]),
-            ("y+", [(gx, gy + 1), (gx + 1, gy + 1)]),
-            ("y-", [(gx, gy), (gx + 1, gy)]),
+            ("x+", [(gy, gx + 1), (gy + 1, gx + 1)]),
+            ("x-", [(gy, gx), (gy + 1, gx)]),
+            ("y+", [(gy + 1, gx), (gy + 1, gx + 1)]),
+            ("y-", [(gy, gx), (gy, gx + 1)]),
         ]
 
         for side_name, line_pts in borders:
@@ -552,11 +620,11 @@ def plot_mission_map(grid_map, plan, output_path=None, title="Round 2 Shortest P
                 ax.plot([line_pts[0][0], line_pts[1][0]], [line_pts[0][1], line_pts[1][1]],
                         color=open_color, linewidth=open_width, linestyle=":")
 
-    # Draw path
+    # Draw path (plot_x = gy + 0.5, plot_y = gx + 0.5)
     if plan and plan.get("success") and plan.get("full_path"):
         full_path = plan["full_path"]
-        path_xs = [c[0] + 0.5 for c in full_path]
-        path_ys = [c[1] + 0.5 for c in full_path]
+        path_xs = [c[1] + 0.5 for c in full_path]
+        path_ys = [c[0] + 0.5 for c in full_path]
 
         ax.plot(path_xs, path_ys, color="#0066cc", linewidth=2.5, linestyle="-", label="Planned Path", zorder=3)
 
@@ -571,40 +639,101 @@ def plot_mission_map(grid_map, plan, output_path=None, title="Round 2 Shortest P
 
         # Mark Start
         start = full_path[0]
-        ax.plot(start[0] + 0.5, start[1] + 0.5, marker="o", markersize=14, color="#00aa00", label="Start", zorder=5)
-        ax.text(start[0] + 0.5, start[1] + 0.5, "START", color="white", fontsize=7,
+        ax.plot(start[1] + 0.5, start[0] + 0.5, marker="o", markersize=14, color="#00aa00", label="Start", zorder=5)
+        ax.text(start[1] + 0.5, start[0] + 0.5, "START", color="white", fontsize=7,
                 ha="center", va="center", weight="bold", zorder=6)
+
+        # Track targets per (cell, side) to apply small offset if multiple
+        targets_at_wall = {}
+        for sp_info in plan.get("shooting_plan", []):
+            tp_key = tuple(sp_info["target_pos"])
+            side_key = sp_info.get("side", "none")
+            key = (tp_key, side_key)
+            targets_at_wall[key] = targets_at_wall.get(key, 0) + 1
+
+        placed_at_wall = {}
+        color_map = {
+            "red": "#e60000",
+            "blue": "#0066ff",
+            "yellow": "#e6b800",
+            "green": "#00aa33",
+        }
 
         # Mark Shooting Standpoints and Aim Lines
         for sp_info in plan.get("shooting_plan", []):
             sp = sp_info["standpoint"]
-            tp = sp_info["target_pos"]
+            tp = tuple(sp_info["target_pos"])
             tid = sp_info["target_id"]
             dist = sp_info["distance_cells"]
-
-            # Standpoint marker
-            ax.plot(sp[0] + 0.5, sp[1] + 0.5, marker="s", markersize=12, color="#ff9900", zorder=5)
-            ax.text(sp[0] + 0.5, sp[1] + 0.5, "FIRE", color="black", fontsize=6,
-                    ha="center", va="center", weight="bold", zorder=6)
-
-            # Shooting ray / line of sight (dashed red line with arrow)
-            ax.annotate("",
-                        xy=(tp[0] + 0.5, tp[1] + 0.5),
-                        xytext=(sp[0] + 0.5, sp[1] + 0.5),
-                        arrowprops=dict(arrowstyle="->", color="#ff0000", lw=2, ls="--"),
-                        zorder=7)
-
-            # Target marker
-            color_map = {"red": "#e60000", "blue": "#0066ff", "yellow": "#e6b800", "green": "#009933"}
+            side = sp_info.get("side")
+            shape = sp_info.get("target_shape", "circle")
             target_color = color_map.get(sp_info.get("target_color", "red"), "#e60000")
 
-            ax.plot(tp[0] + 0.5, tp[1] + 0.5, marker="*", markersize=18, color=target_color, zorder=8)
-            ax.text(tp[0] + 0.5, tp[1] + 0.75, f"{tid}\n({dist} tiles)", color=target_color,
-                    fontsize=8, ha="center", va="bottom", weight="bold", zorder=9)
+            # Standpoint marker in (plot_x=gy, plot_y=gx)
+            sp_plot_x, sp_plot_y = sp[1] + 0.5, sp[0] + 0.5
+            ax.plot(sp_plot_x, sp_plot_y, marker="s", markersize=12, color="#ff9900", zorder=5)
+            ax.text(sp_plot_x, sp_plot_y, "FIRE", color="black", fontsize=6,
+                    ha="center", va="center", weight="bold", zorder=6)
+
+            # Determine wall coordinate for the target (plot_x=gy, plot_y=gx)
+            c_plot_x, c_plot_y = tp[1] + 0.5, tp[0] + 0.5
+            wall_dist = 0.38
+            key = (tp, side)
+            idx = placed_at_wall.get(key, 0)
+            placed_at_wall[key] = idx + 1
+            total_here = targets_at_wall.get(key, 1)
+            # Offset along the wall if multiple targets on same wall
+            jitter = (idx - (total_here - 1) / 2.0) * 0.22 if total_here > 1 else 0.0
+
+            if side == "x+":
+                # Front wall (Top)
+                tx, ty = c_plot_x + jitter, c_plot_y + wall_dist
+            elif side == "x-":
+                # Back wall (Bottom)
+                tx, ty = c_plot_x + jitter, c_plot_y - wall_dist
+            elif side == "y+":
+                # Left wall
+                tx, ty = c_plot_x - wall_dist, c_plot_y + jitter
+            elif side == "y-":
+                # Right wall
+                tx, ty = c_plot_x + wall_dist, c_plot_y + jitter
+            else:
+                tx, ty = c_plot_x, c_plot_y + jitter
+
+            # Shooting ray / line of sight (dashed line with arrow)
+            ax.annotate("",
+                        xy=(tx, ty),
+                        xytext=(sp_plot_x, sp_plot_y),
+                        arrowprops=dict(arrowstyle="->", color=target_color, lw=1.8, ls="--"),
+                        zorder=7)
+
+            # Draw target with actual shape and color
+            if shape == "circle":
+                patch = Circle((tx, ty), radius=0.10, facecolor=target_color, edgecolor="#111111", linewidth=1.5, zorder=8)
+                ax.add_patch(patch)
+            elif shape == "square":
+                patch = Rectangle((tx - 0.10, ty - 0.10), 0.20, 0.20, facecolor=target_color, edgecolor="#111111", linewidth=1.5, zorder=8)
+                ax.add_patch(patch)
+            elif shape == "vertical":
+                patch = Rectangle((tx - 0.06, ty - 0.13), 0.12, 0.26, facecolor=target_color, edgecolor="#111111", linewidth=1.5, zorder=8)
+                ax.add_patch(patch)
+            elif shape == "horizontal":
+                patch = Rectangle((tx - 0.13, ty - 0.06), 0.26, 0.12, facecolor=target_color, edgecolor="#111111", linewidth=1.5, zorder=8)
+                ax.add_patch(patch)
+            else:
+                ax.plot(tx, ty, marker="o", markersize=14, color=target_color, markeredgecolor="#111111", zorder=8)
+
+            label_color = "white" if target_color in ("#e60000", "#0066ff", "#00aa33") else "black"
+            ax.text(tx, ty, f"{tid}", color=label_color, fontsize=6.5,
+                    ha="center", va="center", weight="bold", zorder=9)
+            # Label with shape & distance outside the wall
+            label_offset_y = 0.18 if (side == "x+" or (side not in ("x-", "x+") and ty >= c_plot_y)) else -0.18
+            ax.text(tx, ty + label_offset_y, f"{shape} ({dist}t)", color="#333333",
+                    fontsize=6, ha="center", va="center", zorder=9)
 
     ax.set_title(title, fontsize=14, fontweight="bold")
-    ax.set_xlabel("X (Tiles)")
-    ax.set_ylabel("Y (Tiles)")
+    ax.set_xlabel("Y (Lateral / Side Tiles)")
+    ax.set_ylabel("X (Forward / Heading Tiles) ▲ FORWARD")
     ax.grid(False)
 
     summary_text = (

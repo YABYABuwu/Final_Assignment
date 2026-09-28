@@ -58,8 +58,9 @@ def main():
                     parts.append("{} {}: IO={} ADC={} detected={}".format(
                         end, side, io, adc, state["sides"][side]["detected"]))
                 if all(sensor["detected"] is not None for sensor in state["sides"].values()):
+                    mode = settings.get("recovery_mode", "diagonal")
                     direction, escape_x, escape_y = recovery_vector(
-                        state["sides"], 1.0, end=end)
+                        state["sides"], 1.0, end=end, mode=mode)
                     parts.append("{} escape={} (x={:.0f}, y={:.0f})".format(
                         end, direction, escape_x, escape_y))
             raw = []

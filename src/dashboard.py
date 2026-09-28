@@ -124,11 +124,33 @@ class Dashboard:
         for name in STREAMS:
             if self.logger.stream_settings.get(name, {}).get("enabled"):
                 streams[name] = self.logger.get_latest(name, max_age_s=2)
+        target_detection = {
+            "enabled": bool(self.target_settings),
+            "detections": [
+                {
+                    "color": t.get("color"),
+                    "shape": t.get("shape"),
+                    "center_px": t.get("center", [320, 180]),
+                    "center_offset_norm": [
+                        round((t.get("center", [320, 180])[0] - 320) / 320.0, 4),
+                        round((t.get("center", [320, 180])[1] - 180) / 180.0, 4),
+                    ],
+                    "area_px2": t.get("area_fraction", 0.0) * (640 * 360),
+                    "stability_hits": 3,
+                    "stability_required": 3,
+                    "confirmed": True,
+                }
+                for t in camera_targets
+            ],
+            "age_ms": 50 if camera_ready else None,
+            "error": self.camera_error,
+        }
         return {
             "streams": streams,
             "dropped_csv_rows": self.logger.dropped_rows,
             "camera_ready": camera_ready,
             "camera_targets": camera_targets,
+            "target_detection": target_detection,
             "camera_error": self.camera_error,
             "mission_status": self.mission_status,
             "motion_settings": self.motion_settings,

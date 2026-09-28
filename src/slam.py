@@ -59,6 +59,7 @@ class CellWallGrid:
 
     DIRECTIONS = ((1, 0), (0, -1), (-1, 0), (0, 1))
     SIDE_NAMES = ("x+", "y-", "x-", "y+")
+    DELTA_TO_SIDE = {(1, 0): "x+", (0, -1): "y-", (-1, 0): "x-", (0, 1): "y+"}
 
     def __init__(self, cell_size_m, max_ray_cells):
         self.cell_size_m = float(cell_size_m)
