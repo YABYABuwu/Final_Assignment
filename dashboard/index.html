@@ -325,7 +325,7 @@
           ` · ระยะผนัง ${(motionStop.center_distance_m*100).toFixed(1)} ซม.`+
           (motionStop.planned_center_error_m != null
             ? ` · ห่างเป้ากลางช่อง ${(motionStop.planned_center_error_m*100).toFixed(1)} ซม.` : "")+
-          (motionStop.center_confirmed === false ? " · งดเดินต่อ" : "");
+          (motionStop.status === "emergency_stop_off_center" ? " · ตรวจทางใหม่ก่อนเดินต่อ" : "");
       }
       const inspections=map.exploration?.wall_inspections || [];
       const accepted=inspections.flatMap(item=>item.targets || []).filter(item=>item.status === "fire_command_accepted").length;

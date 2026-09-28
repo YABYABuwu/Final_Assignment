@@ -430,7 +430,7 @@
             `ตำแหน่งจริง X ${motionStop.actual_pose?.[0]?.toFixed(3) ?? "—"} ม. / Y ${motionStop.actual_pose?.[1]?.toFixed(3) ?? "—"} ม.`+
             (motionStop.planned_center_error_m != null
               ? `, ห่างเป้ากลางช่อง ${(motionStop.planned_center_error_m*100).toFixed(1)} ซม.` : "")+
-            (motionStop.center_confirmed === false ? ", งดเดินต่อ" : "");
+            (motionStop.status === "emergency_stop_off_center" ? ", ตรวจทางใหม่ก่อนเดินต่อ" : "");
           wallPanel.append(note);
         }
         const inspections=run.summary.exploration?.wall_inspections || [];

@@ -32,7 +32,6 @@ class DFSExplorer:
         self.alignments = {}
         self.last_motion_heading = None
         self.last_motion_stop = None
-        self.center_pending = None
         self.scan_alignment = None
         self.target_inspector = target_inspector
         self.wall_inspections = {}
@@ -66,7 +65,6 @@ class DFSExplorer:
                 "emergency_stop_distance_m": self.settings["emergency_stop_distance_m"],
                 "last_motion_heading": self.last_motion_heading,
                 "last_motion_stop": self.last_motion_stop,
-                "center_pending": self.center_pending,
                 "scan_alignment": self.scan_alignment,
                 "tof_median_window": self.settings["tof_median_window"],
                 "cell_targets": {f"{node[0]},{node[1]}": list(point)
@@ -684,23 +682,9 @@ class DFSExplorer:
             "planned_center_error_m": round(gap, 4),
             "wall_target_error_m": round(wall_error, 4) if wall_error is not None else None,
         }
-        if confirmation is not None:
-            self.center_pending = None
-        else:
-            self.center_pending = {"cell": list(cell), "actual_pose": list(pose),
-                                   **result}
         return result
 
-    def _require_confirmed_center(self):
-        if self.center_pending is not None:
-            pending = self.center_pending
-            raise MissionStop(
-                "DFS stopped off cell center after emergency stop at {}: "
-                "planned center error {:.3f} m; alignment needs a fresh check".format(
-                    pending["cell"], pending["planned_center_error_m"]))
-
     def _move(self, destination):
-        self._require_confirmed_center()
         with self.lock:
             source = self.current_cell
             target = self.cell_targets.get(tuple(destination))
@@ -835,8 +819,6 @@ class DFSExplorer:
         with self.lock:
             self.moves += 1
             self.current_cell = tuple(destination)
-        if self.center_pending is not None:
-            return True
         self._set_status("waiting_slam_scan")
         while True:
             if (self.map.latest_scan_timestamp or 0.0) > previous_scan:
@@ -867,7 +849,6 @@ class DFSExplorer:
                 self.visited = {root}
             self._set_status("exploring")
             while self.stack:
-                self._require_confirmed_center()
                 with self.lock:
                     current = self.stack[-1]
                     node_count = len(self.visited)
@@ -880,7 +861,6 @@ class DFSExplorer:
                             raise MissionStop("DFS cannot safely return to the start cell")
                         self._set_status("returning_to_start")
                         returned = self._move(parent)
-                        self._require_confirmed_center()
                         if not returned:
                             raise MissionStop("DFS cannot safely return to the start cell")
                         with self.lock:
@@ -910,7 +890,6 @@ class DFSExplorer:
                             with self.lock:
                                 self.stack.append(neighbor)
                                 self.visited.add(neighbor)
-                        self._require_confirmed_center()
                         if not entered:
                             continue
                         moved_to = neighbor
@@ -934,7 +913,6 @@ class DFSExplorer:
                         raise MissionStop("DFS backtrack path is no longer clear")
                     self._set_status(f"backtracking_to_{parent[0]}_{parent[1]}")
                     returned = self._move(parent)
-                    self._require_confirmed_center()
                     if not returned:
                         raise MissionStop("DFS cannot safely backtrack to the parent cell")
                     self._set_status("exploring")

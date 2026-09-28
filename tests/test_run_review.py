@@ -107,8 +107,8 @@ class ReviewTests(unittest.TestCase):
                 }},
             }), encoding="utf-8")
             issues = RunStore(temp).load_run(run_dir.name)["issues"]
-            self.assertTrue(any("0.150 m from planned center" in issue["message"]
-                                for issue in issues))
+            self.assertTrue(any("0.150 m from planned center" in issue["message"] and
+                                issue["level"] == "warning" for issue in issues))
 
     def test_target_inspection_failure_is_visible_in_review(self):
         with tempfile.TemporaryDirectory() as temp:

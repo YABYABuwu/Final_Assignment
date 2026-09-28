@@ -123,7 +123,8 @@ class TargetTests(unittest.TestCase):
 
     def make_inspector(self, fire_result=True):
         settings = copy.deepcopy(load_config()["exploration"])
-        settings["target_inspection"].update({"confirm_frames": 3,
+        settings["target_inspection"].update({"pitch_deg": -15.0,
+                                               "confirm_frames": 3,
                                                "lock_frames": 3,
                                                "max_targets_per_wall": 1})
         logger = FakeLogger()

@@ -804,11 +804,9 @@ class ExplorationTests(unittest.TestCase):
         self.assertEqual(result["actual_pose"][:2], [.45, 0])
         self.assertAlmostEqual(result["planned_center_error_m"], .15)
         self.assertFalse(result["center_confirmed"])
-        self.assertIsNotNone(explorer.center_pending)
         self.assertEqual(explorer.current_cell, (1, 0))
-        with self.assertRaisesRegex(MissionStop, "off cell center"):
-            explorer._move((2, 0))
-        self.assertEqual(len(chassis.commands), 1)
+        explorer._move((2, 0))
+        self.assertEqual(len(chassis.commands), 2)
 
     def test_single_wall_distance_cannot_confirm_cell_center(self):
         explorer = DFSExplorer(None, None, FakeLogger(), self.make_map(), self.settings)
@@ -824,17 +822,19 @@ class ExplorationTests(unittest.TestCase):
         self.assertEqual(accepted["center_confirmation"], "planned_pose")
         self.assertEqual(explorer.cell_targets[(1, 0)], (.6, 0))
 
-    def test_dfs_stops_before_next_move_when_center_is_unconfirmed(self):
+    def test_dfs_continues_after_off_center_emergency_stop(self):
         settings = copy.deepcopy(self.settings)
         settings["alignment"]["enabled"] = False
+        settings["max_nodes"] = 2
         explorer = DFSExplorer(None, None, FakeLogger(), self.make_map(), settings)
         attempts = []
 
         def move(destination):
             attempts.append(destination)
             explorer.current_cell = destination
-            explorer.center_pending = {"cell": list(destination),
-                                       "planned_center_error_m": .15}
+            explorer.last_motion_stop = {"status": "emergency_stop_off_center",
+                                         "center_confirmed": False,
+                                         "planned_center_error_m": .15}
             return True
 
         with patch.object(explorer, "_prepare_gimbal"), \
@@ -843,13 +843,14 @@ class ExplorationTests(unittest.TestCase):
                     delta: delta == (1, 0) for delta in explorer.DIRECTIONS}), \
                 patch.object(explorer.wall_grid, "can_cross",
                              side_effect=lambda node, delta: delta == (1, 0)), \
+                patch.object(explorer, "_can_return", return_value=True), \
                 patch.object(explorer, "_move", side_effect=move):
-            with self.assertRaisesRegex(MissionStop, "off cell center"):
-                explorer.run(FakeSlamWorker())
+            result = explorer.run(FakeSlamWorker())
 
-        self.assertEqual(attempts, [(1, 0)])
-        self.assertEqual(explorer.status, "stopped")
-        self.assertEqual(explorer.stack, [(0, 0), (1, 0)])
+        self.assertEqual(result["status"], "node_limit_returned")
+        self.assertEqual(attempts, [(1, 0), (0, 0)])
+        self.assertEqual(explorer.status, "node_limit_returned")
+        self.assertEqual(explorer.stack, [(0, 0)])
 
     def test_grid_motion_accepts_measured_pitch_offset_within_calibrated_tolerance(self):
         class OffsetPitchChassis(SimulatedChassis):
