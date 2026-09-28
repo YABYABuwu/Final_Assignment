@@ -162,12 +162,13 @@ class TargetTests(unittest.TestCase):
                                         worker, settings, fire_type="infrared")
         return inspector, gimbal, worker, calls
 
-    def test_wall_inspection_fires_once_after_lock_and_restores_scan_pitch(self):
+    def test_wall_inspection_fires_two_shots_after_lock_and_restores_scan_pitch(self):
         inspector, gimbal, worker, calls = self.make_inspector()
         result = inspector.inspect((0, 0), (1, 0), 0, 0)
         self.assertEqual(result["status"], "targets_checked")
         self.assertEqual(result["targets"][0]["status"], "fire_command_accepted")
-        self.assertEqual(calls, [{"fire_type": "infrared", "times": 1}])
+        self.assertEqual(calls, [{"fire_type": "infrared", "times": 2}])
+        self.assertEqual(result["targets"][0]["aim_mode"], "centered")
         self.assertEqual(gimbal.commands, [(-15.0, 0), (0.0, 0)])
         self.assertFalse(worker.paused)
 
@@ -213,17 +214,17 @@ class TargetTests(unittest.TestCase):
         self.assertEqual(result["status"], "targets_checked")
         self.assertEqual({(item["color"], item["shape"]) for item in result["targets"]},
                          {("red", "square"), ("green", "circle")})
-        self.assertEqual(calls, [{"fire_type": "infrared", "times": 1}] * 2)
+        self.assertEqual(calls, [{"fire_type": "infrared", "times": 2}] * 2)
         self.assertFalse(worker.paused)
 
-    def test_pitch_limit_fires_two_infrared_shots_after_stable_horizontal_aim(self):
+    def test_pitch_limit_fires_two_infrared_shots_at_closest_reachable_point(self):
         inspector, gimbal, worker, calls = self.make_inspector()
         inspector.settings["target_inspection"]["pitch_deg"] = -20.0
         inspector.camera_frames = FakeFrames(red_square(center=(320, 270)))
         result = inspector.inspect((0, 0), (1, 0), 0, 0)
         self.assertEqual(calls, [{"fire_type": "infrared", "times": 2}])
         self.assertEqual(result["targets"][0]["shots_requested"], 2)
-        self.assertEqual(result["targets"][0]["aim_mode"], "pitch_limit")
+        self.assertEqual(result["targets"][0]["aim_mode"], "closest_reachable")
         self.assertFalse(worker.paused)
 
     def test_two_same_color_shapes_are_aimed_separately(self):
@@ -243,14 +244,16 @@ class TargetTests(unittest.TestCase):
         self.assertTrue(all(item["status"] == "fire_command_accepted" for item in result["targets"]))
         self.assertEqual(len(calls), 2)
 
-    def test_pitch_limit_does_not_fire_without_horizontal_alignment(self):
-        inspector, _, _, calls = self.make_inspector()
+    def test_off_center_target_fires_at_best_observed_angle_after_aim_budget(self):
+        inspector, gimbal, _, calls = self.make_inspector()
         inspector.settings["target_inspection"].update({"pitch_deg": -20.0,
                                                         "max_aim_steps": 4})
         inspector.camera_frames = FakeFrames(red_square(center=(480, 270)))
         result = inspector.inspect((0, 0), (1, 0), 0, 0)
-        self.assertEqual(calls, [])
-        self.assertEqual(result["targets"][0]["status"], "aim_steps_exhausted")
+        self.assertEqual(calls, [{"fire_type": "infrared", "times": 2}])
+        self.assertEqual(result["targets"][0]["status"], "fire_command_accepted")
+        self.assertEqual(result["targets"][0]["aim_mode"], "closest_reachable")
+        self.assertEqual(gimbal.commands[-2], (-20.0, 0.0))
 
     def test_safety_flag_prevents_aiming_and_firing(self):
         inspector, gimbal, worker, calls = self.make_inspector()

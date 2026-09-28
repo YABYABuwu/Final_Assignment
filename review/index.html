@@ -444,7 +444,7 @@
           for (const item of inspections) {
             const row=document.createElement("li");
             row.textContent=`ช่อง ${item.cell?.join(",")} ทิศ ${item.direction?.join(",")} · ${item.status}`+
-              (item.targets?.length ? ` · ${item.targets.map(target=>`${target.color || "—"}/${target.shape || "—"}: ${target.status}${target.shots_requested ? ` · สั่งยิง ${target.shots_requested} นัด${target.aim_mode === "pitch_limit" ? " (ก้มสุด)" : ""}` : ""}${target.area_fraction != null ? ` (${(target.area_fraction*100).toFixed(1)}% ของภาพ)` : ""}`).join(", ")}` : "")+
+              (item.targets?.length ? ` · ${item.targets.map(target=>`${target.color || "—"}/${target.shape || "—"}: ${target.status}${target.shots_requested ? ` · สั่งยิง ${target.shots_requested} นัด${target.aim_mode === "closest_reachable" ? " (จุดใกล้กลางที่สุด)" : ""}` : ""}${target.area_fraction != null ? ` (${(target.area_fraction*100).toFixed(1)}% ของภาพ)` : ""}`).join(", ")}` : "")+
               (item.status === "checking" && targetProgress?.interrupted_from && item.cell?.join(",") === targetProgress.cell?.join(",") && item.direction?.join(",") === targetProgress.direction?.join(",")
                 ? ` · หยุดขณะ ${targetProgress.interrupted_from}${targetProgress.action_state ? ` (${targetProgress.action_state})` : ""}` : "")+
               (item.reason ? ` · ${item.reason}` : "");

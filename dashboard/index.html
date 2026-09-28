@@ -342,7 +342,7 @@
               (progress.interrupted_from ? ` · ค้างที่ ${progressNames[progress.interrupted_from] || progress.interrupted_from}` : "")+
               (progress.action_state ? ` · action ${progress.action_state}` : "") : "")+
           (latestInspection ? ` · ล่าสุดช่อง ${latestInspection.cell?.join(",")} ทิศ ${latestInspection.direction?.join(",")} ${latestInspection.status}`+
-            (latestInspection.targets?.length ? ` · ${latestInspection.targets.map(item=>`${item.color || "—"}/${item.shape || "—"}: ${item.status}${item.shots_requested ? ` ${item.shots_requested} นัด${item.aim_mode === "pitch_limit" ? " (ก้มสุด)" : ""}` : ""}`).join(", ")}` : "") : "")
+            (latestInspection.targets?.length ? ` · ${latestInspection.targets.map(item=>`${item.color || "—"}/${item.shape || "—"}: ${item.status}${item.shots_requested ? ` ${item.shots_requested} นัด${item.aim_mode === "closest_reachable" ? " (จุดใกล้กลางที่สุด)" : ""}` : ""}`).join(", ")}` : "") : "")
         : "ตรวจเป้าที่กำแพง: ปิด";
       const route = map.trajectory || [];
       if (route.length) {

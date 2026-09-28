@@ -121,7 +121,7 @@ exploration:
     selected: all           # all หรือรายการ เช่น [red:circle, blue:vertical]
     min_area_fraction: 0.02 # ขั้นต่ำ 2% ของภาพ; 360p ประมาณ 4608 px² มากกว่าเกณฑ์เดิม
     confirm_frames: 3       # ต้องเห็นสี/รูปร่างเดิมต่อเนื่องก่อนเล็ง
-    lock_frames: 3          # ต้องอยู่กลางภาพต่อเนื่องก่อนสั่งยิง
+    lock_frames: 3          # ยืนยันว่าเป้ายังอยู่ในภาพต่อเนื่องที่มุมเล็งที่ดีที่สุดก่อนยิง 2 นัด
     center_radius_fraction: 0.04
     aim_offset_x_fraction: 0.0 # ปรับจุดเล็ง IR เทียบกึ่งกลางภาพหลังทดลองระยะใกล้
     aim_offset_y_fraction: 0.0

@@ -145,7 +145,7 @@ class WallTargetInspector:
                            after_frame=after)
         return self.camera_frames.wait_for_frame(after, check_health=self._health)
 
-    def _fire(self, item, frame, shots, aim_mode):
+    def _fire(self, item, frame, aim_mode):
         self._safe_status()
         pitch, yaw, _ = self._angles()
         expected_pitch, expected_yaw = self.commanded_angles
@@ -155,7 +155,7 @@ class WallTargetInspector:
             raise MissionStop("target gimbal drifted before infrared fire")
         self._health()
         try:
-            accepted = self.blaster.fire(fire_type=self.fire_type, times=shots)
+            accepted = self.blaster.fire(fire_type=self.fire_type, times=2)
         except Exception as error:
             raise MissionStop(
                 f"infrared fire command failed; firing state unknown: {error}") from error
@@ -164,59 +164,63 @@ class WallTargetInspector:
         height, width = frame.shape[:2]
         return {"status": "fire_command_accepted", "color": item.color,
                 "shape": item.shape, "area_fraction": round(item.area / (width * height), 4),
-                "center": list(item.center), "shots_requested": shots, "aim_mode": aim_mode}
+                "center": list(item.center), "shots_requested": 2, "aim_mode": aim_mode}
+
+    def _confirm_and_fire(self, track_id, tracker, frame, item, mode):
+        for _ in range(self.settings["target_inspection"]["lock_frames"] - 1):
+            _, frame = self._frame()
+            item = tracker.update(frame).get(track_id)
+            if item is None:
+                return {"status": "target_lost"}
+        return self._fire(item, frame, mode)
 
     def _aim(self, track_id, tracker, first_frame, first_item):
         config = self.settings["target_inspection"]
         frame = first_frame
-        locked = 0
-        lock_mode = None
         lost = 0
-        last_item = None
-        for step_number in range(config["max_aim_steps"]):
-            visible = ({track_id: first_item} if step_number == 0 else
-                       tracker.update(frame))
+        moves = 0
+        first = True
+        best_error = math.inf
+        best_angles = None
+        while True:
+            visible = ({track_id: first_item} if first else tracker.update(frame))
+            first = False
             item = visible.get(track_id)
             if item is None:
-                locked = 0
-                lock_mode = None
                 lost += 1
                 if lost >= 3:
                     return {"status": "target_lost"}
                 _, frame = self._frame()
                 continue
             lost = 0
-            last_item = item
             height, width = frame.shape[:2]
             error_x = item.center[0] / width - (.5 + config["aim_offset_x_fraction"])
             error_y = (.5 + config["aim_offset_y_fraction"]) - item.center[1] / height
             pitch, yaw, _ = self._angles()
-            centered = math.hypot(error_x, error_y) <= config["center_radius_fraction"]
-            pitch_limited = (pitch <= -20 + .1 and
-                             error_y < -config["center_radius_fraction"] and
-                             abs(error_x) <= config["center_radius_fraction"])
-            if centered or pitch_limited:
-                mode = "centered" if centered else "pitch_limit"
-                locked = locked + 1 if mode == lock_mode else 1
-                lock_mode = mode
-                if locked >= config["lock_frames"]:
-                    return self._fire(item, frame, 1 if centered else 2, mode)
-                _, frame = self._frame()
-                continue
-            locked = 0
-            lock_mode = None
+            error = math.hypot(error_x, error_y)
+            if error < best_error:
+                best_error, best_angles = error, (pitch, yaw)
+            if error <= config["center_radius_fraction"]:
+                return self._confirm_and_fire(track_id, tracker, frame, item, "centered")
             step = config["max_step_deg"]
             yaw_step = max(-step, min(step, error_x * config["camera_hfov_deg"]))
             pitch_step = max(-step, min(step, error_y * config["camera_vfov_deg"]))
             next_yaw = max(-250, min(250, yaw + yaw_step))
             next_pitch = max(-20, min(20, pitch + pitch_step))
-            if abs(next_yaw - yaw) < .1 and abs(next_pitch - pitch) < .1:
-                return {"status": "aim_limit", "color": item.color, "shape": item.shape}
+            if (moves >= config["max_aim_steps"] or
+                    (abs(next_yaw - yaw) < .1 and abs(next_pitch - pitch) < .1)):
+                if (abs(best_angles[0] - pitch) >= .1 or
+                        abs(_wrap_degrees(best_angles[1] - yaw)) >= .1):
+                    self._point(*best_angles)
+                    _, frame = self._frame()
+                    item = tracker.update(frame).get(track_id)
+                    if item is None:
+                        return {"status": "target_lost"}
+                return self._confirm_and_fire(track_id, tracker, frame, item,
+                                              "closest_reachable")
             self._point(next_pitch, next_yaw)
+            moves += 1
             _, frame = self._frame()
-        return {"status": "aim_steps_exhausted",
-                "color": last_item.color if last_item else None,
-                "shape": last_item.shape if last_item else None}
 
     def inspect(self, cell, delta, world_yaw, body_yaw):
         self.active_cell, self.active_delta = cell, delta
