@@ -143,6 +143,7 @@ class TargetTests(unittest.TestCase):
         settings["target_inspection"].update({"pitch_deg": -15.0,
                                                "confirm_frames": 3,
                                                "lock_frames": 3,
+                                               "fire_hold_s": .001,
                                                "max_targets_per_wall": 1})
         logger = FakeLogger()
         gimbal = FakeGimbal(logger)
@@ -164,11 +165,15 @@ class TargetTests(unittest.TestCase):
 
     def test_wall_inspection_fires_two_shots_after_lock_and_restores_scan_pitch(self):
         inspector, gimbal, worker, calls = self.make_inspector()
+        inspector.settings["target_inspection"]["fire_hold_s"] = .03
+        started = time.monotonic()
         result = inspector.inspect((0, 0), (1, 0), 0, 0)
+        self.assertGreaterEqual(time.monotonic() - started, .03)
         self.assertEqual(result["status"], "targets_checked")
         self.assertEqual(result["targets"][0]["status"], "fire_command_accepted")
         self.assertEqual(calls, [{"fire_type": "infrared", "times": 2}])
         self.assertEqual(result["targets"][0]["aim_mode"], "centered")
+        self.assertEqual(result["targets"][0]["fire_hold_s"], .03)
         self.assertEqual(gimbal.commands, [(-15.0, 0), (0.0, 0)])
         self.assertFalse(worker.paused)
 

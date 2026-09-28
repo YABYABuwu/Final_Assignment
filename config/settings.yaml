@@ -117,6 +117,9 @@ exploration:
     pitch_tolerance_deg: 8 # telemetry เปลี่ยนตาม yaw สูงสุดราว 7.1°; yaw ยังใช้ tolerance 3°
   target_inspection:
     enabled: true           # ตรวจทุกขอบที่เป็นกำแพงหนึ่งครั้งขณะ DFS หยุดนิ่ง
+    retreat_m: 0.02         # ถอยออกจากผนังก่อนตรวจเป้า 2 ซม. และกลับจุดเดิมหลังตรวจ
+    retreat_position_gain: 4.0 # เร่งการตอบสนอง PID เฉพาะขาถอย; ความเร็วสูงสุดยังถูกจำกัดโดย exploration.max_speed_m_s
+    fire_hold_s: 2.0        # ค้างหลัง SDK รับคำสั่งยิง 2 นัด; SDK ไม่มีสัญญาณยิงเสร็จ
     pitch_deg: -20.0        # มุมก้มที่คำสั่งกิมบอลแสดงใน pitch_ground; ตรวจทิศจริงก่อนยิง
     selected: all           # all หรือรายการ เช่น [red:circle, blue:vertical]
     min_area_fraction: 0.02 # ขั้นต่ำ 2% ของภาพ; 360p ประมาณ 4608 px² มากกว่าเกณฑ์เดิม

@@ -251,12 +251,19 @@ def load_config(path=DEFAULT_CONFIG):
             raise ValueError("exploration.target_inspection.selected must be all or COLOR:SHAPE list")
     for name in ("pitch_deg", "min_area_fraction", "center_radius_fraction",
                  "aim_offset_x_fraction", "aim_offset_y_fraction",
-                 "max_step_deg", "camera_hfov_deg", "camera_vfov_deg"):
+                 "max_step_deg", "camera_hfov_deg", "camera_vfov_deg",
+                 "retreat_m", "retreat_position_gain", "fire_hold_s"):
         value = target.get(name)
         if type(value) not in (int, float) or not math.isfinite(value):
             raise ValueError(f"exploration.target_inspection.{name} must be finite")
     if not -20 <= target["pitch_deg"] <= 20:
         raise ValueError("exploration.target_inspection.pitch_deg must be within -20..20")
+    if not 0 < target["retreat_m"] <= .1:
+        raise ValueError("exploration.target_inspection.retreat_m must be within 0..0.1")
+    if not 1 <= target["retreat_position_gain"] <= 8:
+        raise ValueError("exploration.target_inspection.retreat_position_gain must be within 1..8")
+    if not 0 < target["fire_hold_s"] <= 10:
+        raise ValueError("exploration.target_inspection.fire_hold_s must be within 0..10")
     if not 0 < target["min_area_fraction"] < .5:
         raise ValueError("exploration.target_inspection.min_area_fraction must be within 0..0.5")
     if not 0 < target["center_radius_fraction"] <= .2:

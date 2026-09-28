@@ -161,10 +161,22 @@ class WallTargetInspector:
                 f"infrared fire command failed; firing state unknown: {error}") from error
         if not accepted:
             raise MissionStop("infrared fire command was not accepted; firing state unknown")
+        # The SDK reports command acceptance, not the end of the two-shot burst.
+        # Hold the chassis and gimbal for the configured firing interval.
+        hold_s = self.settings["target_inspection"]["fire_hold_s"]
+        self._progress(self.active_cell, self.active_delta, "waiting_infrared_fire",
+                       target={"color": item.color, "shape": item.shape},
+                       shots_requested=2, hold_s=hold_s)
+        end = time.monotonic() + hold_s
+        while time.monotonic() < end:
+            self._health()
+            self.chassis.stop()
+            time.sleep(min(.05, max(0, end - time.monotonic())))
         height, width = frame.shape[:2]
         return {"status": "fire_command_accepted", "color": item.color,
                 "shape": item.shape, "area_fraction": round(item.area / (width * height), 4),
-                "center": list(item.center), "shots_requested": 2, "aim_mode": aim_mode}
+                "center": list(item.center), "shots_requested": 2, "aim_mode": aim_mode,
+                "fire_hold_s": hold_s}
 
     def _confirm_and_fire(self, track_id, tracker, frame, item, mode):
         for _ in range(self.settings["target_inspection"]["lock_frames"] - 1):

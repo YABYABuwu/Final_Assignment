@@ -333,7 +333,7 @@
       const accepted=inspections.flatMap(item=>item.targets || []).filter(item=>item.status === "fire_command_accepted").reduce((count,item)=>count+(item.shots_requested || 1),0);
       const latestInspection=inspections.at(-1);
       const progress=map.exploration?.target_progress;
-      const progressNames={pointing:"หันกล้อง",searching:"หาตัวเป้า",aiming:"เล็ง",restoring_scan_angle:"คืนมุมสแกน",waiting_target_safety:"รอข้อมูลความปลอดภัย",waiting_target_action:"รอ SDK ปลดคำสั่งกิมบอล",waiting_target_angle:"รอมุมกิมบอล",waiting_camera_frame:"รอภาพกล้องใหม่",stopped:"หยุดระหว่างตรวจเป้า"};
+      const progressNames={pointing:"หันกล้อง",searching:"หาตัวเป้า",aiming:"เล็ง",restoring_scan_angle:"คืนมุมสแกน",waiting_target_safety:"รอข้อมูลความปลอดภัย",waiting_target_action:"รอ SDK ปลดคำสั่งกิมบอล",waiting_target_angle:"รอมุมกิมบอล",waiting_camera_frame:"รอภาพกล้องใหม่",waiting_infrared_fire:"ค้างรอช่วงยิง infrared 2 นัด",stopped:"หยุดระหว่างตรวจเป้า"};
       document.getElementById("target-inspections").textContent = map.exploration?.target_inspection_enabled
         ? `ตรวจเป้าที่กำแพง ${inspections.length} ขอบ · SDK รับคำสั่งยิง infrared ${accepted} ครั้ง`+
           (progressNames[progress?.status]
@@ -341,7 +341,7 @@
               (progress.target_pitch_deg != null ? ` · pitch ${progress.pitch_frame === "chassis" ? "ตัวรถ" : "พื้น"} ${progress.actual_pitch_deg ?? "—"}°/${progress.target_pitch_deg}°` : "")+
               (progress.interrupted_from ? ` · ค้างที่ ${progressNames[progress.interrupted_from] || progress.interrupted_from}` : "")+
               (progress.action_state ? ` · action ${progress.action_state}` : "") : "")+
-          (latestInspection ? ` · ล่าสุดช่อง ${latestInspection.cell?.join(",")} ทิศ ${latestInspection.direction?.join(",")} ${latestInspection.status}`+
+          (latestInspection ? ` · ล่าสุดช่อง ${latestInspection.cell?.join(",")} ทิศ ${latestInspection.direction?.join(",")} ${latestInspection.status}${latestInspection.retreat_status === "inspected_without_retreat" ? " · ตรวจที่เดิม (พื้นที่ถอยไม่พอ)" : latestInspection.retreat_m != null ? ` · สั่งถอย ${(latestInspection.retreat_m*100).toFixed(1)} ซม.${latestInspection.retreat_position_gain != null ? ` · PID ×${latestInspection.retreat_position_gain}` : ""} · ${latestInspection.return_pose_m ? "กลับตำแหน่งเดิมแล้ว" : "ยังไม่ยืนยันการกลับ"}` : ""}`+
             (latestInspection.targets?.length ? ` · ${latestInspection.targets.map(item=>`${item.color || "—"}/${item.shape || "—"}: ${item.status}${item.shots_requested ? ` ${item.shots_requested} นัด${item.aim_mode === "closest_reachable" ? " (จุดใกล้กลางที่สุด)" : ""}` : ""}`).join(", ")}` : "") : "")
         : "ตรวจเป้าที่กำแพง: ปิด";
       const route = map.trajectory || [];
@@ -402,6 +402,8 @@
         dfsStatus === "waiting_tof" ? "รอระยะ ToF ที่ใช้ได้" :
         dfsStatus === "waiting_telemetry" ? "หยุดล้อชั่วคราว · รอข้อมูลเซนเซอร์ใหม่" :
         dfsStatus === "waiting_slam_scan" ? "รอข้อมูล SLAM ใหม่หลังเดิน" :
+        dfsStatus === "retreating_for_target" ? "กำลังถอย 2 ซม. ก่อนตรวจเป้าที่กำแพง" :
+        dfsStatus === "returning_from_target" ? "กำลังกลับตำแหน่งเดิมหลังตรวจเป้า" :
         dfsStatus === "inspecting_wall_target" ? "หยุดนิ่ง · ก้มกล้องตรวจเป้าที่กำแพง" :
         dfsStatus === "aligning" ? "จัดตำแหน่งกลางช่องจากกำแพง" : dfsStatus;
       document.getElementById("map-message").textContent = map.exploration?.error || `scan ${map.scan_count ?? 0} · match ${map.localization_score ?? "—"}`;

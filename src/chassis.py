@@ -152,7 +152,8 @@ class ChassisController:
             bumper.finish_recovery(side, status, distance_m, reason)
 
     def move_to(self, x, y, yaw=None, timeout_s=None, abort_event=None,
-                disable_timeout=False, stop_if=None, pause_if=None):
+                disable_timeout=False, stop_if=None, pause_if=None,
+                position_tolerance_m=None, translation_gain=1.0):
         """Drive toward an absolute (x, y) waypoint; optionally face yaw.
 
         x/y use the chassis position frame established at subscription.
@@ -162,6 +163,12 @@ class ChassisController:
         Missing telemetry pauses the wheels until fresh data returns. A caller
         supplied deadline still raises TimeoutError when progress never finishes.
         """
+        tolerance = (self.settings["position_tolerance_m"] if position_tolerance_m is None
+                     else position_tolerance_m)
+        if not 0 < tolerance <= self.settings["position_tolerance_m"]:
+            raise ValueError("position_tolerance_m must be positive and no larger than the configured tolerance")
+        if not isinstance(translation_gain, (int, float)) or not math.isfinite(translation_gain) or translation_gain <= 0:
+            raise ValueError("translation_gain must be a positive finite number")
         timeout = None if disable_timeout else (
             timeout_s if timeout_s is not None else self.settings["timeout_s"]
         )
@@ -216,7 +223,7 @@ class ChassisController:
                 error_y = y - current_y
                 heading_error = 0 if target_yaw is None else angle_error(target_yaw, current_yaw)
 
-                arrived = math.hypot(error_x, error_y) <= self.settings["position_tolerance_m"]
+                arrived = math.hypot(error_x, error_y) <= tolerance
                 facing = target_yaw is None or abs(heading_error) <= self.settings["angle_tolerance_deg"]
                 if arrived and facing:
                     return pose
@@ -226,8 +233,8 @@ class ChassisController:
                 previous = now
                 # Compute speeds in the fixed position frame, then rotate into
                 # the robot's forward/right frame used by drive_speed().
-                vx_world = self.pid_x.compute(error_x, dt)
-                vy_world = self.pid_y.compute(error_y, dt)
+                vx_world = self.pid_x.compute(error_x, dt) * translation_gain
+                vy_world = self.pid_y.compute(error_y, dt) * translation_gain
                 heading_rad = math.radians(current_yaw)
                 vx_robot = vx_world * math.cos(heading_rad) + vy_world * math.sin(heading_rad)
                 vy_robot = -vx_world * math.sin(heading_rad) + vy_world * math.cos(heading_rad)

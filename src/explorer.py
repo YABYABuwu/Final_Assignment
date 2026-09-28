@@ -139,7 +139,8 @@ class DFSExplorer:
             return yaw if math.isfinite(yaw) else None
         return self._wait_for_fresh(read_attitude_yaw)
 
-    def _drive_holding_current_yaw(self, x, y, kind, stop_if=None):
+    def _drive_holding_current_yaw(self, x, y, kind, stop_if=None,
+                                   position_tolerance_m=None, translation_gain=None):
         """Capture the live chassis heading immediately before this motion."""
         yaw = self._current_yaw()
         with self.lock:
@@ -151,6 +152,10 @@ class DFSExplorer:
                    "pause_if": lambda: self.slam_worker.status().get("waiting_telemetry", False)}
         if stop_if is not None:
             options["stop_if"] = stop_if
+        if position_tolerance_m is not None:
+            options["position_tolerance_m"] = position_tolerance_m
+        if translation_gain is not None:
+            options["translation_gain"] = translation_gain
         return self.chassis.move_to(x, y, **options)
 
     def _motion_pose(self):
@@ -611,7 +616,18 @@ class DFSExplorer:
         if not self.settings["target_inspection"]["enabled"]:
             return
         if self.target_inspector is None:
-            raise MissionStop("target inspection needs the dashboard camera and infrared blaster")
+            with self.lock:
+                for delta in self.DIRECTIONS:
+                    key = (tuple(node), delta)
+                    edge = self.wall_grid.edges.get(CellWallGrid.edge_key(node, delta), {})
+                    if (edge.get("state") == "wall" and edge.get("source") == "direct" and
+                            key not in self.wall_inspections):
+                        self.wall_inspections[key] = {
+                            "cell": list(node), "direction": list(delta),
+                            "status": "skipped_inspector_unavailable", "targets": [],
+                            "reason": "dashboard camera or infrared blaster unavailable"}
+            self.map.set_exploration_state(self.snapshot())
+            return
         for delta in self.DIRECTIONS:
             key = (tuple(node), delta)
             with self.lock:
@@ -630,7 +646,12 @@ class DFSExplorer:
                     fresh_check = self.wall_grid.checks.get((tuple(node), delta))
                     fresh_state = self.wall_grid.state(node, delta)
                 if fresh_check is None:
-                    raise MissionStop("wall target inspection needs a fresh ToF wall check")
+                    with self.lock:
+                        self.wall_inspections[key].update({
+                            "status": "skipped_no_wall_check",
+                            "reason": "no fresh ToF wall check"})
+                    self.map.set_exploration_state(self.snapshot())
+                    continue
                 if fresh_state != "wall":
                     with self.lock:
                         self.wall_inspections[key]["status"] = "wall_no_longer_present"
@@ -638,11 +659,63 @@ class DFSExplorer:
                     continue
                 body_yaw = self._current_yaw()
                 world_yaw = self.base_pose[2] + math.degrees(math.atan2(delta[1], delta[0]))
-                result = self.target_inspector.inspect(node, delta, world_yaw, body_yaw)
+                retreat_m = self.settings["target_inspection"]["retreat_m"]
+                tolerance_m = min(retreat_m / 4, self.chassis.settings["position_tolerance_m"])
+                origin = self._motion_pose()
+                angle = math.radians(world_yaw)
+                retreat = (origin[0] - retreat_m * math.cos(angle),
+                           origin[1] - retreat_m * math.sin(angle))
+                if not self.map.contains_world(*retreat):
+                    with self.lock:
+                        self.wall_inspections[key].update({
+                            "status": "skipped_retreat_outside_map",
+                            "reason": "retreat waypoint is outside the SLAM map"})
+                    self.map.set_exploration_state(self.snapshot())
+                    continue
+                with self.lock:
+                    self.wall_inspections[key]["retreat_m"] = retreat_m
+                    self.wall_inspections[key]["retreat_position_gain"] = self.settings["target_inspection"]["retreat_position_gain"]
+                    self.wall_inspections[key]["origin_pose_m"] = list(origin[:2])
+                self._set_status("retreating_for_target")
+                moved = False
+                try:
+                    self._drive_holding_current_yaw(*retreat, "target_retreat",
+                                                    position_tolerance_m=tolerance_m,
+                                                    translation_gain=self.settings["target_inspection"]["retreat_position_gain"])
+                    moved = True
+                    self._set_status("inspecting_wall_target")
+                    result = self.target_inspector.inspect(node, delta, world_yaw, body_yaw)
+                    result["retreat_m"] = retreat_m
+                    result["retreat_position_gain"] = self.settings["target_inspection"]["retreat_position_gain"]
+                    result["origin_pose_m"] = list(origin[:2])
+                    with self.lock:
+                        self.wall_inspections[key] = result
+                finally:
+                    # A failed inspection still needs its original scan position.
+                    if moved:
+                        self._set_status("returning_from_target")
+                        self._drive_holding_current_yaw(origin[0], origin[1],
+                                                        "target_return",
+                                                        position_tolerance_m=tolerance_m)
+                        return_pose = list(self._motion_pose()[:2])
+                        with self.lock:
+                            self.wall_inspections[key]["return_pose_m"] = return_pose
+                result["return_pose_m"] = self.wall_inspections[key]["return_pose_m"]
             except MissionStop as error:
+                reason = str(error)
+                with self.lock:
+                    returned = "return_pose_m" in self.wall_inspections[key]
+                if returned and (reason.startswith("camera stopped during target inspection") or
+                                 reason.startswith("wall camera cannot reach target yaw") or
+                                 reason.startswith("target gimbal drifted before infrared fire")):
+                    with self.lock:
+                        self.wall_inspections[key]["status"] = "skipped_target_unavailable"
+                        self.wall_inspections[key]["reason"] = reason
+                    self.map.set_exploration_state(self.snapshot())
+                    continue
                 with self.lock:
                     self.wall_inspections[key]["status"] = "stopped"
-                    self.wall_inspections[key]["reason"] = str(error)
+                    self.wall_inspections[key]["reason"] = reason
                 self.map.set_exploration_state(self.snapshot())
                 raise
             with self.lock:

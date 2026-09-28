@@ -57,6 +57,7 @@ class TemplateTests(unittest.TestCase):
         self.assertEqual(config["exploration"]["tof_median_window"], 3)
         self.assertIsInstance(config["exploration"]["alignment"]["enabled"], bool)
         self.assertEqual(config["exploration"]["emergency_stop_distance_m"], .20)
+        self.assertEqual(config["exploration"]["target_inspection"]["retreat_position_gain"], 4.0)
         self.assertNotIn("min_range_m", config["exploration"]["map"])
         self.assertNotIn("max_range_m", config["exploration"]["map"])
 
@@ -372,6 +373,22 @@ class TemplateTests(unittest.TestCase):
                 chassis.move_to(destination, 0, yaw=0, timeout_s=.01)
             self.assertAlmostEqual(module.commands[0]["x"], expected)
             self.assertEqual(module.commands[0]["y"], 0)
+
+    def test_short_retreat_translation_gain_increases_initial_command(self):
+        motion = load_config()["motion"]
+        motion["control_period_s"] = .001
+        first_speeds = []
+        for gain in (1.0, 4.0):
+            module = FakeModule()
+            chassis = ChassisController(SimpleNamespace(chassis=module), None, motion)
+            chassis.get_pose = lambda: (0, 0, 0)
+            with self.assertRaises(TimeoutError):
+                chassis.move_to(-.02, 0, yaw=0, timeout_s=.005,
+                                position_tolerance_m=.005, translation_gain=gain)
+            first_speeds.append(module.commands[0]["x"])
+            self.assertEqual(module.commands[-1], {"x": 0, "y": 0, "z": 0})
+        self.assertLess(first_speeds[1], first_speeds[0] * 3.5)
+        self.assertLessEqual(abs(first_speeds[1]), motion["max_speed_m_s"])
 
     def test_move_to_corrects_heading_drift_without_new_turn_target(self):
         module = FakeModule()

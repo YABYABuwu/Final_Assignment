@@ -444,6 +444,7 @@
           for (const item of inspections) {
             const row=document.createElement("li");
             row.textContent=`ช่อง ${item.cell?.join(",")} ทิศ ${item.direction?.join(",")} · ${item.status}`+
+              (item.retreat_status === "inspected_without_retreat" ? ` · ตรวจที่เดิม (${item.retreat_reason || "พื้นที่ถอยไม่พอ"})` : item.retreat_m != null ? ` · ถอย ${(item.retreat_m*100).toFixed(1)} ซม.${item.retreat_position_gain != null ? ` · PID ×${item.retreat_position_gain}` : ""} · กลับ ${item.return_pose_m ? "แล้ว" : "ไม่สำเร็จ"}` : "")+
               (item.targets?.length ? ` · ${item.targets.map(target=>`${target.color || "—"}/${target.shape || "—"}: ${target.status}${target.shots_requested ? ` · สั่งยิง ${target.shots_requested} นัด${target.aim_mode === "closest_reachable" ? " (จุดใกล้กลางที่สุด)" : ""}` : ""}${target.area_fraction != null ? ` (${(target.area_fraction*100).toFixed(1)}% ของภาพ)` : ""}`).join(", ")}` : "")+
               (item.status === "checking" && targetProgress?.interrupted_from && item.cell?.join(",") === targetProgress.cell?.join(",") && item.direction?.join(",") === targetProgress.direction?.join(",")
                 ? ` · หยุดขณะ ${targetProgress.interrupted_from}${targetProgress.action_state ? ` (${targetProgress.action_state})` : ""}` : "")+

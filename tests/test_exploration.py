@@ -481,14 +481,17 @@ class ExplorationTests(unittest.TestCase):
         settings = copy.deepcopy(self.settings)
         settings["target_inspection"]["enabled"] = True
         checked = []
+        sequence = []
 
         def inspect(node, delta, world_yaw, body_yaw):
             checked.append((node, delta))
+            sequence.append("inspect")
             return {"cell": list(node), "direction": list(delta),
                     "status": "no_target", "targets": []}
 
         explorer = DFSExplorer(None, None, FakeLogger(), self.make_map(), settings,
                                target_inspector=SimpleNamespace(inspect=inspect))
+        explorer.chassis = SimpleNamespace(settings={"position_tolerance_m": .015})
         explorer.base_pose = (0, 0, 0)
         explorer.wall_grid.observe((0, 0), (1, 0), .2, 125, 300, time.time())
         def fresh_wall(node, neighbor):
@@ -497,11 +500,22 @@ class ExplorationTests(unittest.TestCase):
             return False
 
         with patch.object(explorer, "_current_yaw", return_value=0), \
-                patch.object(explorer, "_can_step", side_effect=fresh_wall):
+                patch.object(explorer, "_can_step", side_effect=fresh_wall), \
+                patch.object(explorer, "_motion_pose", return_value=(0, 0, 0)), \
+                patch.object(explorer, "_scan_for_direction", return_value=(500, 180)) as scan, \
+                patch.object(explorer, "_drive_holding_current_yaw",
+                             side_effect=lambda *args, **kwargs: sequence.append(args[2])) as drive:
             explorer._inspect_walls((0, 0))
             explorer._inspect_walls((0, 0))
             explorer._inspect_walls((1, 0))
         self.assertEqual(checked, [((0, 0), (1, 0)), ((1, 0), (-1, 0))])
+        self.assertEqual(drive.call_count, 4)
+        self.assertEqual([call.kwargs.get("translation_gain") for call in drive.call_args_list],
+                         [4.0, None, 4.0, None])
+        scan.assert_not_called()
+        self.assertEqual(sequence, ["target_retreat", "inspect", "target_return"] * 2)
+        self.assertEqual(explorer.snapshot()["wall_inspections"][0]["retreat_m"],
+                         settings["target_inspection"]["retreat_m"])
         self.assertEqual(explorer.snapshot()["wall_inspections"][0]["status"], "no_target")
 
     def test_wall_target_inspection_skips_wall_that_reopened(self):
@@ -523,6 +537,65 @@ class ExplorationTests(unittest.TestCase):
         self.assertEqual(calls, [])
         self.assertEqual(explorer.snapshot()["wall_inspections"][0]["status"],
                          "wall_no_longer_present")
+
+    def test_wall_target_inspection_retreats_without_back_tof_check(self):
+        settings = copy.deepcopy(self.settings)
+        settings["target_inspection"]["enabled"] = True
+        inspected = []
+        def inspect(*args):
+            inspected.append(args)
+            return {"cell": [0, 0], "direction": [1, 0],
+                    "status": "no_target", "targets": []}
+        explorer = DFSExplorer(None, None, FakeLogger(), self.make_map(), settings,
+                               target_inspector=SimpleNamespace(inspect=inspect))
+        explorer.chassis = SimpleNamespace(settings={"position_tolerance_m": .015})
+        explorer.base_pose = (0, 0, 0)
+        explorer.wall_grid.observe((0, 0), (1, 0), .2, 125, 300, time.time())
+
+        def fresh_wall(node, neighbor):
+            explorer.wall_grid.observe(node, (1, 0), .2, 125, 300, time.time())
+            return False
+
+        with patch.object(explorer, "_current_yaw", return_value=0), \
+                patch.object(explorer, "_can_step", side_effect=fresh_wall), \
+                patch.object(explorer, "_motion_pose", return_value=(0, 0, 0)), \
+                patch.object(explorer, "_scan_for_direction") as scan, \
+                patch.object(explorer, "_drive_holding_current_yaw") as drive:
+            explorer._inspect_walls((0, 0))
+        self.assertEqual(len(inspected), 1)
+        self.assertEqual(drive.call_count, 2)
+        scan.assert_not_called()
+        inspection = explorer.snapshot()["wall_inspections"][0]
+        self.assertEqual(inspection["status"], "no_target")
+        self.assertEqual(inspection["retreat_m"], settings["target_inspection"]["retreat_m"])
+
+    def test_camera_failure_returns_to_origin_and_skips_wall(self):
+        settings = copy.deepcopy(self.settings)
+        settings["target_inspection"]["enabled"] = True
+
+        def failed_inspection(*args):
+            raise MissionStop("camera stopped during target inspection: disconnected")
+
+        explorer = DFSExplorer(None, None, FakeLogger(), self.make_map(), settings,
+                               target_inspector=SimpleNamespace(inspect=failed_inspection))
+        explorer.chassis = SimpleNamespace(settings={"position_tolerance_m": .015})
+        explorer.base_pose = (0, 0, 0)
+        explorer.wall_grid.observe((0, 0), (1, 0), .2, 125, 300, time.time())
+
+        def fresh_wall(node, neighbor):
+            explorer.wall_grid.observe(node, (1, 0), .2, 125, 300, time.time())
+            return False
+
+        with patch.object(explorer, "_current_yaw", return_value=0), \
+                patch.object(explorer, "_can_step", side_effect=fresh_wall), \
+                patch.object(explorer, "_motion_pose", return_value=(0, 0, 0)), \
+                patch.object(explorer, "_scan_for_direction", return_value=(500, 0)), \
+                patch.object(explorer, "_drive_holding_current_yaw") as drive:
+            explorer._inspect_walls((0, 0))
+        self.assertEqual(drive.call_count, 2)
+        inspection = explorer.snapshot()["wall_inspections"][0]
+        self.assertEqual(inspection["status"], "skipped_target_unavailable")
+        self.assertEqual(inspection["return_pose_m"], [0, 0])
 
     def test_alignment_uses_center_distance_and_keeps_corrected_return_target(self):
         slam_map = self.make_map()
