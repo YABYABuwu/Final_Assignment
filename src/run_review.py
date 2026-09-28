@@ -95,6 +95,13 @@ class RunStore:
             if alignment.get("status") == "stalled" or alignment.get("status", "").startswith("skipped_"):
                 issues.append({"level": "warning", "time_s": None,
                                "message": f"Alignment {cell}: {alignment.get('reason') or alignment['status']}"})
+        motion_stop = (summary.get("exploration") or {}).get("last_motion_stop") or {}
+        if motion_stop.get("center_confirmed") is False:
+            issues.append({"level": "error", "time_s": None,
+                           "message": "Emergency stop left cell {} center unconfirmed "
+                                      "({:.3f} m from planned center)".format(
+                                          motion_stop.get("center_cell"),
+                                          motion_stop.get("planned_center_error_m", 0.0))})
         for end in ("rear", "front"):
             for recovery in summary.get(end + "_ir_recoveries", []):
                 issues.append({"level": "warning" if recovery["status"] != "cleared" else "info",

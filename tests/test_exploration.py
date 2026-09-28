@@ -718,7 +718,7 @@ class ExplorationTests(unittest.TestCase):
         self.assertAlmostEqual(explorer.alignments[(0, 0)]["after_m"]["y+"], .35)
         self.assertAlmostEqual(explorer.alignments[(0, 0)]["after_m"]["y-"], .35)
 
-    def test_grid_emergency_stop_after_midpoint_uses_actual_cell_center(self):
+    def test_grid_emergency_stop_after_midpoint_keeps_planned_center_when_unconfirmed(self):
         class EmergencyChassis(SimulatedChassis):
             def move_to(self, x, y, yaw=None, stop_if=None, **kwargs):
                 self.commands.append((x, y, yaw))
@@ -748,12 +748,58 @@ class ExplorationTests(unittest.TestCase):
         self.assertTrue(explorer._move((1, 0)))
 
         result = explorer.last_motion_stop
-        self.assertEqual(result["status"], "emergency_stop_centered")
+        self.assertEqual(result["status"], "emergency_stop_off_center")
         self.assertEqual(result["range_mm"], 110)
         self.assertAlmostEqual(result["center_distance_m"], .185)
         self.assertEqual(result["center_cell"], [1, 0])
-        self.assertAlmostEqual(explorer.cell_targets[(1, 0)][0], .45)
+        self.assertAlmostEqual(explorer.cell_targets[(1, 0)][0], .60)
+        self.assertEqual(result["actual_pose"][:2], [.45, 0])
+        self.assertAlmostEqual(result["planned_center_error_m"], .15)
+        self.assertFalse(result["center_confirmed"])
+        self.assertIsNotNone(explorer.center_pending)
         self.assertEqual(explorer.current_cell, (1, 0))
+        with self.assertRaisesRegex(MissionStop, "off cell center"):
+            explorer._move((2, 0))
+        self.assertEqual(len(chassis.commands), 1)
+
+    def test_single_wall_distance_cannot_confirm_cell_center(self):
+        explorer = DFSExplorer(None, None, FakeLogger(), self.make_map(), self.settings)
+        explorer.base_pose = (0, 0, 0)
+        explorer.cell_targets[(1, 0)] = (.6, 0)
+
+        rejected = explorer._assess_stopped_center((1, 0), (.45, 0, 0), .25)
+        self.assertFalse(rejected["center_confirmed"])
+        self.assertAlmostEqual(rejected["wall_target_error_m"], 0)
+        self.assertEqual(explorer.cell_targets[(1, 0)], (.6, 0))
+        accepted = explorer._assess_stopped_center((1, 0), (.59, 0, 0), .25)
+        self.assertTrue(accepted["center_confirmed"])
+        self.assertEqual(accepted["center_confirmation"], "planned_pose")
+        self.assertEqual(explorer.cell_targets[(1, 0)], (.6, 0))
+
+    def test_dfs_stops_before_next_move_when_center_is_unconfirmed(self):
+        settings = copy.deepcopy(self.settings)
+        settings["alignment"]["enabled"] = False
+        explorer = DFSExplorer(None, None, FakeLogger(), self.make_map(), settings)
+        attempts = []
+
+        def move(destination):
+            attempts.append(destination)
+            explorer.current_cell = destination
+            explorer.center_pending = {"cell": list(destination),
+                                       "planned_center_error_m": .15}
+            return True
+
+        with patch.object(explorer, "_prepare_gimbal"), \
+                patch.object(explorer, "_motion_pose", return_value=(0, 0, 0)), \
+                patch.object(explorer, "_scan_all_directions", return_value={
+                    delta: delta == (1, 0) for delta in explorer.DIRECTIONS}), \
+                patch.object(explorer, "_move", side_effect=move):
+            with self.assertRaisesRegex(MissionStop, "off cell center"):
+                explorer.run(FakeSlamWorker())
+
+        self.assertEqual(attempts, [(1, 0)])
+        self.assertEqual(explorer.status, "stopped")
+        self.assertEqual(explorer.stack, [(0, 0), (1, 0)])
 
     def test_grid_motion_accepts_measured_pitch_offset_within_calibrated_tolerance(self):
         class OffsetPitchChassis(SimulatedChassis):
@@ -808,7 +854,9 @@ class ExplorationTests(unittest.TestCase):
 
         self.assertFalse(explorer._move((1, 0)))
         self.assertEqual(explorer.current_cell, (0, 0))
-        self.assertAlmostEqual(explorer.cell_targets[(0, 0)][0], .10)
+        self.assertAlmostEqual(explorer.cell_targets[(0, 0)][0], 0)
+        self.assertAlmostEqual(explorer.last_motion_stop["planned_center_error_m"], .10)
+        self.assertFalse(explorer.last_motion_stop["center_confirmed"])
         self.assertEqual(explorer.wall_grid.state((0, 0), (1, 0)), "wall")
 
     def test_grid_emergency_stop_on_return_uses_return_direction(self):
@@ -838,7 +886,8 @@ class ExplorationTests(unittest.TestCase):
 
         self.assertTrue(explorer._move((1, 0)))
         self.assertTrue(explorer._move((0, 0)))
-        self.assertAlmostEqual(explorer.cell_targets[(0, 0)][0], .15)
+        self.assertAlmostEqual(explorer.cell_targets[(0, 0)][0], 0)
+        self.assertFalse(explorer.last_motion_stop["center_confirmed"])
         self.assertEqual(explorer.last_motion_stop["center_cell"], [0, 0])
         self.assertAlmostEqual(abs(gimbal.yaw), 180)
 

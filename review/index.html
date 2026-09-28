@@ -421,9 +421,16 @@
         const motionStop=run.summary.exploration?.last_motion_stop;
         if (motionStop?.center_distance_m != null) {
           const note=document.createElement("p");
-          note.textContent=`${motionStop.status === "emergency_stop_centered" ? "หยุดฉุกเฉินระหว่างเดิน" : "ทางถูกปิดก่อนเดิน"}: `+
+          const label=motionStop.status === "emergency_stop_centered"
+            ? "หยุดฉุกเฉิน · ยืนยันกลางช่องแล้ว" :
+            motionStop.status === "emergency_stop_off_center"
+            ? "หยุดฉุกเฉิน · กลางช่องยังไม่ยืนยัน" : "ทางถูกปิดก่อนเดิน";
+          note.textContent=`${label}: `+
             `ช่อง ${motionStop.center_cell?.join(",") || "—"}, ระยะ ${(motionStop.center_distance_m*100).toFixed(1)} ซม., `+
-            `ตำแหน่งจริง X ${motionStop.actual_pose?.[0]?.toFixed(3) ?? "—"} ม. / Y ${motionStop.actual_pose?.[1]?.toFixed(3) ?? "—"} ม.`;
+            `ตำแหน่งจริง X ${motionStop.actual_pose?.[0]?.toFixed(3) ?? "—"} ม. / Y ${motionStop.actual_pose?.[1]?.toFixed(3) ?? "—"} ม.`+
+            (motionStop.planned_center_error_m != null
+              ? `, ห่างเป้ากลางช่อง ${(motionStop.planned_center_error_m*100).toFixed(1)} ซม.` : "")+
+            (motionStop.center_confirmed === false ? ", งดเดินต่อ" : "");
           wallPanel.append(note);
         }
         const table=document.createElement("table"); table.style.width="100%";

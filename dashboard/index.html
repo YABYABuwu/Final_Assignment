@@ -317,10 +317,15 @@
       const motionStop=map.exploration?.last_motion_stop;
       if (motionStop?.center_distance_m != null) {
         const stopLabel=motionStop.status === "emergency_stop_centered"
-          ? "หยุดฉุกเฉินระหว่างเดิน" : "ทางถูกปิดก่อนเดิน";
+          ? "หยุดฉุกเฉิน · ยืนยันกลางช่องแล้ว" :
+          motionStop.status === "emergency_stop_off_center"
+          ? "หยุดฉุกเฉิน · กลางช่องยังไม่ยืนยัน" : "ทางถูกปิดก่อนเดิน";
         document.getElementById("cell-sides").textContent +=
           ` · ${stopLabel}: ช่อง ${motionStop.center_cell?.join(",") || "—"}`+
-          ` · ระยะ ${(motionStop.center_distance_m*100).toFixed(1)} ซม.`;
+          ` · ระยะผนัง ${(motionStop.center_distance_m*100).toFixed(1)} ซม.`+
+          (motionStop.planned_center_error_m != null
+            ? ` · ห่างเป้ากลางช่อง ${(motionStop.planned_center_error_m*100).toFixed(1)} ซม.` : "")+
+          (motionStop.center_confirmed === false ? " · งดเดินต่อ" : "");
       }
       const route = map.trajectory || [];
       if (route.length) {

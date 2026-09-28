@@ -95,6 +95,21 @@ class ReviewTests(unittest.TestCase):
             self.assertTrue(any("movement ToF" in issue["message"] for issue in issues))
             self.assertTrue(any("0.059 m" in issue["message"] for issue in issues))
 
+    def test_unconfirmed_cell_center_is_visible_in_review(self):
+        with tempfile.TemporaryDirectory() as temp:
+            run_dir = Path(temp) / "off_center"
+            run_dir.mkdir()
+            (run_dir / "run_summary.json").write_text(json.dumps({
+                "status": "stopped", "error": "DFS stopped off cell center",
+                "exploration": {"last_motion_stop": {
+                    "status": "emergency_stop_off_center", "center_cell": [1, 0],
+                    "center_confirmed": False, "planned_center_error_m": .15,
+                }},
+            }), encoding="utf-8")
+            issues = RunStore(temp).load_run(run_dir.name)["issues"]
+            self.assertTrue(any("0.150 m from planned center" in issue["message"]
+                                for issue in issues))
+
     def test_zero_tof_is_reported_once_per_invalid_streak(self):
         with tempfile.TemporaryDirectory() as temp:
             run_dir = Path(temp) / "zeros"
