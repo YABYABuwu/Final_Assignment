@@ -23,13 +23,15 @@ def red_square(center=(320, 180), size=90):
 class FakeLogger:
     def __init__(self):
         self.pitch = 0
+        self.chassis_pitch = None
         self.yaw = 0
         self.timestamp = time.time()
         self.status = (0,) * 10
 
     def get_sample(self, name, max_age_s=None):
         if name == "gimbal":
-            return (self.pitch, self.yaw, self.pitch, self.yaw), self.timestamp
+            return ((self.pitch if self.chassis_pitch is None else self.chassis_pitch),
+                    self.yaw, self.pitch, self.yaw), self.timestamp
         if name == "status":
             return self.status, time.time()
         if name in ("position", "attitude"):
@@ -209,6 +211,35 @@ class TargetTests(unittest.TestCase):
         inspector._point(-15, 0)
         self.assertGreaterEqual(len(checks), 3)
         self.assertFalse(gimbal.active)
+
+    def test_inspection_accepts_ground_pitch_when_chassis_pitch_drifts(self):
+        inspector, gimbal, worker, calls = self.make_inspector()
+        gimbal.logger.chassis_pitch = -23.6
+        progress = []
+        inspector.on_progress = progress.append
+        result = inspector.inspect((0, 0), (0, -1), -90, 0)
+        self.assertEqual(result["targets"][0]["status"], "fire_command_accepted")
+        self.assertEqual(len(calls), 1)
+        self.assertFalse(worker.paused)
+        self.assertTrue(any(item["status"] == "waiting_camera_frame" for item in progress))
+        self.assertTrue(any(item["status"] == "waiting_target_angle" and
+                            item["target_pitch_ground_deg"] == -15 for item in progress))
+
+    def test_camera_error_does_not_overlap_running_gimbal_action(self):
+        inspector, gimbal, worker, calls = self.make_inspector()
+        inspector.camera_frames.camera_error = None
+
+        def unfinished_move(pitch, yaw, pitch_speed, yaw_speed):
+            gimbal.commands.append((pitch, yaw))
+            inspector.camera_frames.camera_error = "stream lost"
+            return SimpleNamespace(state="action_running", has_succeeded=False)
+
+        gimbal.moveto = unfinished_move
+        with self.assertRaisesRegex(MissionStop, "camera stopped"):
+            inspector.inspect((0, 0), (1, 0), 0, 0)
+        self.assertEqual(gimbal.commands, [(-15.0, 0)])
+        self.assertEqual(calls, [])
+        self.assertFalse(worker.paused)
 
 
 if __name__ == "__main__":

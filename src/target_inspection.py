@@ -21,27 +21,34 @@ class WallTargetInspector:
         self.fire_type = fire_type
         self.on_progress = on_progress
         self.commanded_angles = None
+        self.active_cell = None
+        self.active_delta = None
+        self.restoring = False
+        self.active_action = None
 
-    def _progress(self, cell, delta, status, target=None):
+    def _progress(self, cell, delta, status, target=None, **detail):
         if self.on_progress is not None:
             self.on_progress({"cell": list(cell), "direction": list(delta),
-                              "status": status, "target": target})
+                              "status": status, "target": target, **detail})
 
     def _health(self):
         error = self.slam_worker.status().get("error")
         if error:
             raise MissionStop(error)
         camera_error = getattr(self.camera_frames, "camera_error", None)
-        if camera_error:
-            raise MissionStop(f"camera stopped during target inspection: {camera_error}")
+        if camera_error is not None and not self.restoring:
+            raise MissionStop(f"camera stopped during target inspection: {camera_error or 'unknown error'}")
 
     def _angles(self):
         while True:
             self._health()
             sample = self.logger.get_sample("gimbal", max_age_s=self.settings["max_sample_age_s"])
-            if sample is not None and len(sample[0]) >= 2:
+            if sample is not None and len(sample[0]) >= 3:
                 try:
-                    pitch, yaw = float(sample[0][0]), float(sample[0][1])
+                    # This action's requested pitch is seen in the SDK's
+                    # ground pitch on a tilted chassis. Chassis pitch drifts
+                    # while the physical head stays at the requested angle.
+                    pitch, yaw = float(sample[0][2]), float(sample[0][1])
                     if math.isfinite(pitch) and math.isfinite(yaw):
                         return pitch, yaw, sample[1]
                 except (TypeError, ValueError):
@@ -75,11 +82,14 @@ class WallTargetInspector:
                 yaw_speed=self.settings["gimbal"]["yaw_speed_deg_s"])
         except Exception as error:
             raise MissionStop(f"target gimbal command failed: {error}") from error
+        self.active_action = action
         released = action is None
+        reported_state = None
         while True:
             self._health()
             state = getattr(action, "state", None)
             if state in ("action_failed", "action_rejected", "action_exception", "action_aborted"):
+                self.active_action = None
                 raise MissionStop(f"target gimbal action failed: {state}")
             if not released and getattr(action, "has_succeeded", False):
                 wait = getattr(action, "wait_for_completed", None)
@@ -91,7 +101,16 @@ class WallTargetInspector:
                     if not completed:
                         raise MissionStop("target gimbal action was not released by SDK")
                 released = True
+                self.active_action = None
             measured_pitch, measured_yaw, timestamp = self._angles()
+            waiting_state = "waiting_target_angle" if released else "waiting_target_action"
+            if waiting_state != reported_state and self.active_cell is not None:
+                self._progress(self.active_cell, self.active_delta, waiting_state,
+                               target_pitch_ground_deg=pitch,
+                               actual_pitch_ground_deg=round(measured_pitch, 2),
+                               target_yaw_deg=yaw, actual_yaw_deg=round(measured_yaw, 2),
+                               action_state=state)
+                reported_state = waiting_state
             if (released and timestamp > request_time and
                     abs(measured_pitch - pitch) <= self.settings["gimbal"]["pitch_tolerance_deg"] and
                     abs(_wrap_degrees(measured_yaw - yaw)) <=
@@ -102,6 +121,9 @@ class WallTargetInspector:
 
     def _frame(self):
         after = self.camera_frames.current_frame_number()
+        if self.active_cell is not None:
+            self._progress(self.active_cell, self.active_delta, "waiting_camera_frame",
+                           after_frame=after)
         return self.camera_frames.wait_for_frame(after, check_health=self._health)
 
     def _aim(self, track_id, tracker, first_frame, first_item):
@@ -164,6 +186,7 @@ class WallTargetInspector:
                 "shape": last_item.shape if last_item else None}
 
     def inspect(self, cell, delta, world_yaw, body_yaw):
+        self.active_cell, self.active_delta = cell, delta
         config = self.settings["target_inspection"]
         selected = None if config["selected"] == "all" else {
             tuple(item.split(":")) for item in config["selected"]}
@@ -215,10 +238,14 @@ class WallTargetInspector:
         finally:
             restored = False
             try:
-                self._progress(cell, delta, "restoring_scan_angle")
-                self._point(self.settings["gimbal"]["pitch_deg"], original_yaw)
-                restored = True
+                self.restoring = True
+                if self.active_action is None:
+                    self._progress(cell, delta, "restoring_scan_angle")
+                    self._point(self.settings["gimbal"]["pitch_deg"], original_yaw)
+                    restored = True
             finally:
+                self.restoring = False
                 self.slam_worker.resume_mapping()
                 self._progress(cell, delta, result["status"] if restored and
                                result["status"] != "checking" else "stopped")
+                self.active_cell = self.active_delta = None

@@ -117,7 +117,7 @@ exploration:
     pitch_tolerance_deg: 8 # telemetry เปลี่ยนตาม yaw สูงสุดราว 7.1°; yaw ยังใช้ tolerance 3°
   target_inspection:
     enabled: true           # ตรวจทุกขอบที่เป็นกำแพงหนึ่งครั้งขณะ DFS หยุดนิ่ง
-    pitch_deg: -15.0        # ก้มกล้องเทียบตัวรถ; ต้องตรวจทิศจริงบนหุ่นก่อนยิง
+    pitch_deg: -15.0        # มุมก้มที่คำสั่งกิมบอลแสดงใน pitch_ground; ตรวจทิศจริงก่อนยิง
     selected: all           # all หรือรายการ เช่น [red:circle, blue:vertical]
     min_area_fraction: 0.02 # ขั้นต่ำ 2% ของภาพ; 360p ประมาณ 4608 px² มากกว่าเกณฑ์เดิม
     confirm_frames: 3       # ต้องเห็นสี/รูปร่างเดิมต่อเนื่องก่อนเล็ง

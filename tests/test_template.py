@@ -1,6 +1,7 @@
 import csv
 import io
 import json
+from queue import Empty
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -130,6 +131,32 @@ class TemplateTests(unittest.TestCase):
         self.assertEqual(dashboard.latest_jpeg, b"jpeg-bytes")
         self.assertEqual(dashboard.frame_number, 1)
         self.assertEqual(calls[0]["strategy"], "newest")
+        self.assertEqual(dashboard.camera_error, "camera disconnected")
+
+    def test_dashboard_camera_retries_empty_sdk_frame_queue(self):
+        calls = []
+
+        def read_image(**options):
+            calls.append(options)
+            if len(calls) == 1:
+                raise Empty()
+            if len(calls) == 2:
+                return object()
+            raise OSError("camera disconnected")
+
+        fake_cv2 = SimpleNamespace(
+            IMWRITE_JPEG_QUALITY=1,
+            imencode=lambda extension, image, options: (
+                True, SimpleNamespace(tobytes=lambda: b"jpeg-bytes")
+            ),
+        )
+        logger = SimpleNamespace(stream_settings={}, dropped_rows=0)
+        robot = SimpleNamespace(camera=SimpleNamespace(read_cv2_image=read_image))
+        dashboard = Dashboard(robot, logger, load_config()["dashboard"])
+        dashboard.running.set()
+        with patch.dict("sys.modules", {"cv2": fake_cv2}):
+            dashboard._camera_loop()
+        self.assertEqual(dashboard.frame_number, 1)
         self.assertEqual(dashboard.camera_error, "camera disconnected")
 
     def test_logger_selection_and_csv(self):

@@ -1,6 +1,7 @@
 """Local dashboard for live robot telemetry and camera images."""
 
 import json
+from queue import Empty
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -58,6 +59,8 @@ class Dashboard:
                             self.latest_frame = image.copy() if hasattr(image, "copy") else image
                             self.frame_number += 1
                             self.frame_changed.notify_all()
+            except Empty:
+                pass
             except Exception as error:
                 self.camera_error = str(error)
                 self.running.clear()
