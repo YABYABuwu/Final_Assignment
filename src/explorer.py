@@ -444,13 +444,17 @@ class DFSExplorer:
         for positive, negative in (((1, 0), (-1, 0)), ((0, 1), (0, -1))):
             selected.append(tuple(delta for delta in (positive, negative) if delta in walls))
 
+        initial_readings = {}
         for sides in selected:
             for delta in sides:
                 reading, yaw = self._scan_for_direction(delta)
                 if reading > self.settings["wall_threshold_mm"]:
                     skip("skipped_wall_missing", f"selected wall at {node} is no longer detected")
                     return
-                walls[delta] = reading / 1000.0 + self._sensor_offset(yaw)
+                distance = reading / 1000.0 + self._sensor_offset(yaw)
+                walls[delta] = distance
+                initial_readings[delta] = (distance, reading, yaw,
+                                           self.map.latest_scan_timestamp)
 
         corrections = []
         for sides in selected:
@@ -487,10 +491,12 @@ class DFSExplorer:
         self._set_status("aligning")
         verified = {}
         steps = 0
+        moved_on_previous_axis = False
         for axis, sides in enumerate(selected):
             if not sides:
                 continue
-            while True:
+            current = {delta: initial_readings[delta] for delta in sides}
+            if moved_on_previous_axis:
                 current = {}
                 for delta in sides:
                     reading, yaw = self._scan_for_direction(delta)
@@ -499,9 +505,31 @@ class DFSExplorer:
                              (x, y), steps, verified)
                         return
                     distance = reading / 1000.0 + self._sensor_offset(yaw)
-                    current[delta] = (distance, reading, yaw)
-                    name = CellWallGrid.SIDE_NAMES[self.DIRECTIONS.index(delta)]
-                    verified[name] = round(distance, 4)
+                    current[delta] = (distance, reading, yaw,
+                                      self.map.latest_scan_timestamp)
+            for delta in sides:
+                name = CellWallGrid.SIDE_NAMES[self.DIRECTIONS.index(delta)]
+                verified[name] = round(current[delta][0], 4)
+            while True:
+                worker_status = self.slam_worker.status() if self.slam_worker is not None else None
+                if worker_status is not None and worker_status.get("error"):
+                    raise MissionStop(worker_status["error"])
+                if (worker_status or {}).get("waiting_telemetry") or any(
+                        reading[3] is None or
+                        time.time() - reading[3] > self.settings["max_sample_age_s"]
+                        for reading in current.values()):
+                    current = {}
+                    for delta in sides:
+                        reading, yaw = self._scan_for_direction(delta)
+                        if reading > self.settings["wall_threshold_mm"]:
+                            skip("skipped_wall_missing", f"selected wall at {node} is no longer detected",
+                                 (x, y), steps, verified)
+                            return
+                        distance = reading / 1000.0 + self._sensor_offset(yaw)
+                        current[delta] = (distance, reading, yaw,
+                                          self.map.latest_scan_timestamp)
+                        name = CellWallGrid.SIDE_NAMES[self.DIRECTIONS.index(delta)]
+                        verified[name] = round(distance, 4)
                 if len(sides) == 2:
                     correction = (current[sides[0]][0] - current[sides[1]][0]) / 2
                 elif sides[0][axis] > 0:
@@ -523,6 +551,7 @@ class DFSExplorer:
                 pose = self._drive_holding_current_yaw(*target, kind="alignment")
                 x, y = pose[:2]
                 steps += 1
+                moved_on_previous_axis = True
                 actual = {}
                 for delta in sides:
                     reading, yaw = self._scan_for_direction(delta)
@@ -531,20 +560,22 @@ class DFSExplorer:
                              (x, y), steps, verified)
                         return
                     distance = reading / 1000.0 + self._sensor_offset(yaw)
-                    actual[delta] = distance
+                    actual[delta] = (distance, reading, yaw,
+                                     self.map.latest_scan_timestamp)
                     name = CellWallGrid.SIDE_NAMES[self.DIRECTIONS.index(delta)]
                     verified[name] = round(distance, 4)
                 if len(sides) == 2:
-                    remaining = (actual[sides[0]] - actual[sides[1]]) / 2
+                    remaining = (actual[sides[0]][0] - actual[sides[1]][0]) / 2
                 elif sides[0][axis] > 0:
-                    remaining = actual[sides[0]] - desired
+                    remaining = actual[sides[0]][0] - desired
                 else:
-                    remaining = desired - actual[sides[0]]
+                    remaining = desired - actual[sides[0]][0]
                 if (abs(remaining) > tolerance and
                         abs(remaining) >= abs(correction) - .005):
                     skip("stalled", f"remaining correction {remaining:.3f} m at {node}",
                          (x, y), steps, verified)
                     return
+                current = actual
         with self.lock:
             self.cell_targets[node] = (x, y)
             result["status"] = "moved"
@@ -601,8 +632,12 @@ class DFSExplorer:
         # A return to a visited cell needs one fresh scan in the travel
         # direction for the emergency monitor, but not a four-sided scan.
         measured_mm, world_yaw = self._scan_for_direction(delta)
-        distance = measured_mm / 1000.0 + self._sensor_offset(world_yaw)
         start_pose = self._motion_pose()
+        move_yaw = math.radians(world_yaw)
+        center = self._to_map(source)
+        pose_along = ((start_pose[0] - center[0]) * math.cos(move_yaw) +
+                      (start_pose[1] - center[1]) * math.sin(move_yaw))
+        distance = measured_mm / 1000.0 + self._sensor_offset(world_yaw) + pose_along
         emergency_distance = self.settings["emergency_stop_distance_m"]
         if measured_mm <= self.settings["wall_threshold_mm"]:
             with self.lock:
@@ -759,21 +794,21 @@ class DFSExplorer:
                     clear = {delta: self.wall_grid.can_cross(current, delta)
                              for delta in self.DIRECTIONS}
                     self._set_status("exploring")
-                next_node = None
+                moved_to = None
                 for delta in self.DIRECTIONS:
                     neighbor = (current[0] + delta[0], current[1] + delta[1])
                     if neighbor in self.visited:
                         continue
-                    if clear[delta] and self._can_step(current, neighbor):
-                        next_node = neighbor
-                        break
-
-                if next_node is not None:
-                    self._set_status(f"moving_to_{next_node[0]}_{next_node[1]}")
-                    if self._move(next_node):
+                    if clear[delta]:
+                        self._set_status(f"moving_to_{neighbor[0]}_{neighbor[1]}")
+                        if not self._move(neighbor):
+                            continue
                         with self.lock:
-                            self.stack.append(next_node)
-                            self.visited.add(next_node)
+                            self.stack.append(neighbor)
+                            self.visited.add(neighbor)
+                        moved_to = neighbor
+                        break
+                if moved_to is not None:
                     self._set_status("exploring")
                     continue
 

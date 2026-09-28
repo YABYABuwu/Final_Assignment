@@ -372,7 +372,7 @@ class ExplorationTests(unittest.TestCase):
                 if not self.commands:
                     self_test.assertEqual([round(command[1]) for command in new_scans[1:5]],
                                           [0, -90, -180, 90])
-                    self_test.assertEqual(len(new_scans), 7)  # Recenter + six scans.
+                    self_test.assertEqual(len(new_scans), 6)  # Recenter + four sides + one travel check.
                 else:
                     self_test.assertEqual(len(new_scans), 1)
                 self.previous_scan_count = len(self.gimbal.commands)
@@ -392,6 +392,32 @@ class ExplorationTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "node_limit_returned")
         self.assertEqual(len(chassis.commands), 2)
+
+    def test_fresh_travel_scan_rejects_edge_that_closed_after_four_side_scan(self):
+        settings = copy.deepcopy(self.settings)
+        settings["alignment"]["enabled"] = False
+        settings["max_nodes"] = 2
+        slam_map = self.make_map()
+        logger = FakeLogger()
+        logger.set("attitude", (0, 0, 0))
+        front_scans = [0]
+
+        def ranges(pose, yaw):
+            if abs(((yaw + 180) % 360) - 180) < 10 and abs(pose[0]) < .01:
+                front_scans[0] += 1
+                return 2000 if front_scans[0] == 1 else 100
+            return 2000
+
+        gimbal = SimulatedGimbal(slam_map, logger, ranges)
+        chassis = SimulatedChassis(slam_map, logger, gimbal, ranges)
+        explorer = DFSExplorer(chassis, gimbal, logger, slam_map, settings)
+
+        result = explorer.run(FakeSlamWorker())
+
+        self.assertEqual(result["status"], "node_limit_returned")
+        self.assertGreaterEqual(front_scans[0], 2)
+        self.assertEqual(chassis.commands[0][:2], (0.0, -.6))
+        self.assertEqual(explorer.wall_grid.state((0, 0), (1, 0)), "wall")
 
     def test_grid_motion_captures_fresh_yaw_for_each_step_and_return(self):
         self.settings["heading_source"] = "gimbal"
@@ -533,6 +559,35 @@ class ExplorationTests(unittest.TestCase):
         self.assertAlmostEqual(chassis.commands[1][1], -.157)
         self.assertEqual(explorer.alignments[(0, 0)]["steps"], 2)
         self.assertAlmostEqual(explorer.alignments[(0, 0)]["after_m"]["y-"], .25)
+        self.assertEqual(len(gimbal.commands), 3)  # One initial scan, then one after each move.
+
+    def test_alignment_refreshes_scan_after_waiting_for_pose(self):
+        settings = copy.deepcopy(self.settings)
+        settings["max_sample_age_s"] = .02
+        slam_map = self.make_map()
+        logger = FakeLogger()
+        logger.set("attitude", (0, 0, 0))
+
+        def wall_range(pose, yaw):
+            return round((.30 - pose[0] - .075) * 1000)
+
+        gimbal = SimulatedGimbal(slam_map, logger, wall_range)
+        chassis = SimulatedChassis(slam_map, logger, gimbal, wall_range)
+        explorer = DFSExplorer(chassis, gimbal, logger, slam_map, settings)
+        explorer.base_pose = (0, 0, 0)
+        explorer.slam_worker = FakeSlamWorker()
+        explorer.wall_grid.observe((0, 0), (1, 0), .30, 225, 300, time.time())
+        read_pose = explorer._motion_pose
+
+        def delayed_pose():
+            time.sleep(.08)
+            return read_pose()
+
+        explorer._motion_pose = delayed_pose
+        explorer._align_cell((0, 0))
+
+        self.assertEqual(len(chassis.commands), 1)
+        self.assertGreaterEqual(len(gimbal.commands), 3)  # Refresh after the delayed pose.
 
     def test_alignment_stops_if_wall_distance_does_not_improve(self):
         settings = copy.deepcopy(self.settings)
@@ -1169,7 +1224,7 @@ class ExplorationTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "node_limit_returned")
         self.assertEqual(result["moves"], 2)
-        self.assertEqual(len(gimbal.commands), 8)  # Recenter, four directions, checks and return monitor.
+        self.assertEqual(len(gimbal.commands), 7)  # Recenter, four directions, travel and return scans.
         self.assertEqual(explorer.scanned_cells, {(0, 0)})
 
     def test_revisiting_scanned_cell_reuses_four_recorded_sides(self):

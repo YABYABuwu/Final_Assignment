@@ -148,7 +148,9 @@ class RearIRTests(unittest.TestCase):
         path.write_text(yaml.safe_dump(settings), encoding="utf-8")
         self.assertTrue(load_config(path)["front_ir"]["enabled"])
         settings["rear_ir"] = dict(settings["rear_ir"],
-                                   right=dict(settings["rear_ir"]["right"], id=3, port=2))
+                                   right=dict(settings["rear_ir"]["right"],
+                                              id=settings["front_ir"]["right"]["id"],
+                                              port=settings["front_ir"]["right"]["port"]))
         path.write_text(yaml.safe_dump(settings), encoding="utf-8")
         with self.assertRaisesRegex(ValueError, "shares an adapter port"):
             load_config(path)
