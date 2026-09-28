@@ -107,7 +107,26 @@ class ReviewTests(unittest.TestCase):
                 }},
             }), encoding="utf-8")
             issues = RunStore(temp).load_run(run_dir.name)["issues"]
-            self.assertTrue(any("0.150 m from planned center" in issue["message"]
+            self.assertTrue(any("0.150 m from planned center" in issue["message"] and
+                                issue["level"] == "warning" for issue in issues))
+
+    def test_target_inspection_failure_is_visible_in_review(self):
+        with tempfile.TemporaryDirectory() as temp:
+            run_dir = Path(temp) / "target_stop"
+            run_dir.mkdir()
+            (run_dir / "run_summary.json").write_text(json.dumps({
+                "status": "stopped", "error": "camera stopped",
+                "exploration": {"wall_inspections": [{
+                    "cell": [0, 0], "direction": [1, 0],
+                    "status": "stopped", "reason": "camera stopped", "targets": []},
+                    {"cell": [0, 0], "direction": [0, 1],
+                     "status": "targets_checked", "targets": [{
+                         "color": "red", "shape": "square", "status": "aim_limit"}]}]},
+            }), encoding="utf-8")
+            issues = RunStore(temp).load_run(run_dir.name)["issues"]
+            self.assertTrue(any("Target inspection stopped" in issue["message"]
+                                for issue in issues))
+            self.assertTrue(any("Target red / square" in issue["message"]
                                 for issue in issues))
 
     def test_zero_tof_is_reported_once_per_invalid_streak(self):

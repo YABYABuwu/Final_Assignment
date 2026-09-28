@@ -237,6 +237,43 @@ def load_config(path=DEFAULT_CONFIG):
     pitch = gimbal.get("pitch_deg")
     if not isinstance(pitch, (int, float)) or not math.isfinite(pitch):
         raise ValueError("exploration.gimbal.pitch_deg must be a finite number")
+    target = exploration.get("target_inspection")
+    if not isinstance(target, dict) or not isinstance(target.get("enabled"), bool):
+        raise ValueError("exploration.target_inspection.enabled must be true or false")
+    selected = target.get("selected")
+    colors = {"red", "green", "yellow", "blue"}
+    shapes = {"circle", "square", "horizontal", "vertical"}
+    if selected != "all":
+        if (not isinstance(selected, list) or not selected or
+                any(not isinstance(item, str) or len(item.split(":")) != 2 or
+                    item.split(":")[0] not in colors or item.split(":")[1] not in shapes
+                    for item in selected)):
+            raise ValueError("exploration.target_inspection.selected must be all or COLOR:SHAPE list")
+    for name in ("pitch_deg", "min_area_fraction", "center_radius_fraction",
+                 "aim_offset_x_fraction", "aim_offset_y_fraction",
+                 "max_step_deg", "camera_hfov_deg", "camera_vfov_deg"):
+        value = target.get(name)
+        if type(value) not in (int, float) or not math.isfinite(value):
+            raise ValueError(f"exploration.target_inspection.{name} must be finite")
+    if not -20 <= target["pitch_deg"] <= 20:
+        raise ValueError("exploration.target_inspection.pitch_deg must be within -20..20")
+    if not 0 < target["min_area_fraction"] < .5:
+        raise ValueError("exploration.target_inspection.min_area_fraction must be within 0..0.5")
+    if not 0 < target["center_radius_fraction"] <= .2:
+        raise ValueError("exploration.target_inspection.center_radius_fraction must be within 0..0.2")
+    for name in ("aim_offset_x_fraction", "aim_offset_y_fraction"):
+        if not -.25 <= target[name] <= .25:
+            raise ValueError(f"exploration.target_inspection.{name} must be within -0.25..0.25")
+    for name in ("max_step_deg", "camera_hfov_deg", "camera_vfov_deg"):
+        if not 0 < target[name] <= (10 if name == "max_step_deg" else 180):
+            raise ValueError(f"exploration.target_inspection.{name} is outside its range")
+    for name in ("confirm_frames", "lock_frames", "max_aim_steps", "max_targets_per_wall"):
+        if type(target.get(name)) is not int or not 1 <= target[name] <= 30:
+            raise ValueError(f"exploration.target_inspection.{name} must be an integer from 1 to 30")
+    if target["max_aim_steps"] < target["lock_frames"]:
+        raise ValueError("exploration.target_inspection.max_aim_steps must cover lock_frames")
+    if target.get("fire_mode") != "infrared":
+        raise ValueError("exploration.target_inspection.fire_mode must be infrared")
     if exploration["enabled"]:
         if config["mission"].get("enabled"):
             raise ValueError("mission and exploration cannot both be enabled")

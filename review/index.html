@@ -430,8 +430,27 @@
             `ตำแหน่งจริง X ${motionStop.actual_pose?.[0]?.toFixed(3) ?? "—"} ม. / Y ${motionStop.actual_pose?.[1]?.toFixed(3) ?? "—"} ม.`+
             (motionStop.planned_center_error_m != null
               ? `, ห่างเป้ากลางช่อง ${(motionStop.planned_center_error_m*100).toFixed(1)} ซม.` : "")+
-            (motionStop.center_confirmed === false ? ", งดเดินต่อ" : "");
+            (motionStop.status === "emergency_stop_off_center" ? ", ตรวจทางใหม่ก่อนเดินต่อ" : "");
           wallPanel.append(note);
+        }
+        const inspections=run.summary.exploration?.wall_inspections || [];
+        const targetProgress=run.summary.exploration?.target_progress;
+        if (inspections.length) {
+          const title=document.createElement("p");
+          const shots=inspections.flatMap(item=>item.targets || []).filter(item=>item.status === "fire_command_accepted").reduce((count,item)=>count+(item.shots_requested || 1),0);
+          title.textContent=`ตรวจเป้าที่กำแพง ${inspections.length} ขอบ · SDK รับคำสั่งยิง infrared ${shots} ครั้ง (ยังไม่ยืนยันว่าโดนเป้า)`;
+          wallPanel.append(title);
+          const list=document.createElement("ul");
+          for (const item of inspections) {
+            const row=document.createElement("li");
+            row.textContent=`ช่อง ${item.cell?.join(",")} ทิศ ${item.direction?.join(",")} · ${item.status}`+
+              (item.targets?.length ? ` · ${item.targets.map(target=>`${target.color || "—"}/${target.shape || "—"}: ${target.status}${target.shots_requested ? ` · สั่งยิง ${target.shots_requested} นัด${target.aim_mode === "closest_reachable" ? " (จุดใกล้กลางที่สุด)" : ""}` : ""}${target.area_fraction != null ? ` (${(target.area_fraction*100).toFixed(1)}% ของภาพ)` : ""}`).join(", ")}` : "")+
+              (item.status === "checking" && targetProgress?.interrupted_from && item.cell?.join(",") === targetProgress.cell?.join(",") && item.direction?.join(",") === targetProgress.direction?.join(",")
+                ? ` · หยุดขณะ ${targetProgress.interrupted_from}${targetProgress.action_state ? ` (${targetProgress.action_state})` : ""}` : "")+
+              (item.reason ? ` · ${item.reason}` : "");
+            list.append(row);
+          }
+          wallPanel.append(list);
         }
         const table=document.createElement("table"); table.style.width="100%";
         const header=document.createElement("tr");

@@ -84,8 +84,17 @@ def main():
             dashboard = Dashboard(ep_robot, logger, config["dashboard"],
                                   slam_map=slam_map, slam_worker=slam_worker,
                                   explorer=explorer, motion_settings=logger.motion_settings,
-                                  rear_ir=chassis.rear_ir, front_ir=chassis.front_ir)
+                                  rear_ir=chassis.rear_ir, front_ir=chassis.front_ir,
+                                  target_settings=(exploration_settings["target_inspection"]
+                                                   if explorer is not None else None))
             dashboard.start()
+            if explorer is not None and exploration_settings["target_inspection"]["enabled"]:
+                from robomaster import blaster as sdk_blaster
+                from src.target_inspection import WallTargetInspector
+                explorer.target_inspector = WallTargetInspector(
+                    ep_robot.gimbal, ep_robot.blaster, dashboard, logger, chassis,
+                    slam_worker, exploration_settings, sdk_blaster.INFRARED_FIRE,
+                    on_progress=explorer._set_target_progress, scan_gimbal=explorer.gimbal)
             host = config["dashboard"]["host"]
             port = config["dashboard"]["port"]
             print(f"Dashboard: http://{host}:{port}")

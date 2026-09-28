@@ -32,6 +32,7 @@
     .crosshair::after { height: 1px; width: 62px; top: 30px; }
     .crosshair span { position: absolute; left: 25px; top: 25px; width: 11px; height: 11px; border: 1px solid #8ef4d3; border-radius: 50%; background: #061a1a88; }
     .camera-note { padding: 10px 16px; min-height: 38px; }
+    .camera-targets { padding: 0 16px 12px; color: #b9d9e2; font-size: .82rem; line-height: 1.5; }
     .map-wrap { display: grid; gap: 10px; padding: 14px; }
     #map { display: block; width: 100%; height: 330px; border-radius: 9px; background: #0a1721; }
     .map-info { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr)); gap: 7px 14px; font-size: .8rem; color: #d4e4ec; background: #0a1721; border: 1px solid #315060; border-radius: 9px; padding: 9px 11px; }
@@ -72,6 +73,7 @@
           <div class="crosshair"><span></span></div>
         </div>
         <p class="camera-note muted" id="camera-note">รอภาพจากกล้อง…</p>
+        <p class="camera-targets" id="camera-targets">เป้าในภาพ: รอข้อมูล</p>
       </section>
       <section class="card">
         <div class="card-head"><h2>IR กันชนหลัง</h2><span class="muted">IO · ดู ID/port ใน config</span></div>
@@ -87,7 +89,7 @@
           <label class="muted"><input id="fine-map" type="checkbox"> แสดง occupancy ละเอียด</label>
           <canvas id="map" aria-label="เส้นทาง ตำแหน่ง และทิศหุ่นยนต์"></canvas>
           <div class="map-legend"><span class="key" style="--key:#8cf1d2">ขอบทางเปิด</span><span class="key" style="--key:#ffb868">กำแพง</span><span class="key" style="--key:#718594">เส้นประ: ยังไม่รู้/อนุมาน</span><span class="key" style="--key:#69d9ff">เส้นทาง</span></div>
-          <div class="map-info"><div>DFS&nbsp; <strong id="dfs-status">ปิด</strong></div><div id="map-counts">รอข้อมูลแผนที่</div><div id="pose">X — · Y — · Yaw —</div><div>ความเร็ว&nbsp; <strong id="speed">— m/s</strong></div><div>อัตราเร่งสไลด์ซ้าย/ขวาสูงสุด&nbsp; <strong id="acceleration">— m/s²</strong></div><div>Gimbal&nbsp; <span id="gimbal-map">—</span></div><div>DFS เลือกขอบทางเปิดจาก ToF ที่สแกนใหม่</div><div>ทิศแผนที่: ↑ +X เหนือ · ↓ −X ใต้ · → +Y ตะวันออก</div><div id="tof-model">ToF: —</div><div id="cell-sides"></div><div id="map-message"></div></div>
+          <div class="map-info"><div>DFS&nbsp; <strong id="dfs-status">ปิด</strong></div><div id="map-counts">รอข้อมูลแผนที่</div><div id="pose">X — · Y — · Yaw —</div><div>ความเร็ว&nbsp; <strong id="speed">— m/s</strong></div><div>อัตราเร่งสไลด์ซ้าย/ขวาสูงสุด&nbsp; <strong id="acceleration">— m/s²</strong></div><div>Gimbal&nbsp; <span id="gimbal-map">—</span></div><div>DFS เลือกขอบทางเปิดจาก ToF ที่สแกนใหม่</div><div>ทิศแผนที่: ↑ +X เหนือ · ↓ −X ใต้ · → +Y ตะวันออก</div><div id="tof-model">ToF: —</div><div id="cell-sides"></div><div id="target-inspections">ตรวจเป้าที่กำแพง: รอข้อมูล</div><div id="map-message"></div></div>
         </div>
       </section>
     </div>
@@ -325,8 +327,23 @@
           ` · ระยะผนัง ${(motionStop.center_distance_m*100).toFixed(1)} ซม.`+
           (motionStop.planned_center_error_m != null
             ? ` · ห่างเป้ากลางช่อง ${(motionStop.planned_center_error_m*100).toFixed(1)} ซม.` : "")+
-          (motionStop.center_confirmed === false ? " · งดเดินต่อ" : "");
+          (motionStop.status === "emergency_stop_off_center" ? " · ตรวจทางใหม่ก่อนเดินต่อ" : "");
       }
+      const inspections=map.exploration?.wall_inspections || [];
+      const accepted=inspections.flatMap(item=>item.targets || []).filter(item=>item.status === "fire_command_accepted").reduce((count,item)=>count+(item.shots_requested || 1),0);
+      const latestInspection=inspections.at(-1);
+      const progress=map.exploration?.target_progress;
+      const progressNames={pointing:"หันกล้อง",searching:"หาตัวเป้า",aiming:"เล็ง",restoring_scan_angle:"คืนมุมสแกน",waiting_target_safety:"รอข้อมูลความปลอดภัย",waiting_target_action:"รอ SDK ปลดคำสั่งกิมบอล",waiting_target_angle:"รอมุมกิมบอล",waiting_camera_frame:"รอภาพกล้องใหม่",stopped:"หยุดระหว่างตรวจเป้า"};
+      document.getElementById("target-inspections").textContent = map.exploration?.target_inspection_enabled
+        ? `ตรวจเป้าที่กำแพง ${inspections.length} ขอบ · SDK รับคำสั่งยิง infrared ${accepted} ครั้ง`+
+          (progressNames[progress?.status]
+            ? ` · ${progressNames[progress.status]} ช่อง ${progress.cell?.join(",")} ทิศ ${progress.direction?.join(",")} ${progress.target ? `(${progress.target.color}/${progress.target.shape})` : ""}`+
+              (progress.target_pitch_deg != null ? ` · pitch ${progress.pitch_frame === "chassis" ? "ตัวรถ" : "พื้น"} ${progress.actual_pitch_deg ?? "—"}°/${progress.target_pitch_deg}°` : "")+
+              (progress.interrupted_from ? ` · ค้างที่ ${progressNames[progress.interrupted_from] || progress.interrupted_from}` : "")+
+              (progress.action_state ? ` · action ${progress.action_state}` : "") : "")+
+          (latestInspection ? ` · ล่าสุดช่อง ${latestInspection.cell?.join(",")} ทิศ ${latestInspection.direction?.join(",")} ${latestInspection.status}`+
+            (latestInspection.targets?.length ? ` · ${latestInspection.targets.map(item=>`${item.color || "—"}/${item.shape || "—"}: ${item.status}${item.shots_requested ? ` ${item.shots_requested} นัด${item.aim_mode === "closest_reachable" ? " (จุดใกล้กลางที่สุด)" : ""}` : ""}`).join(", ")}` : "") : "")
+        : "ตรวจเป้าที่กำแพง: ปิด";
       const route = map.trajectory || [];
       if (route.length) {
         ctx.beginPath();
@@ -385,6 +402,7 @@
         dfsStatus === "waiting_tof" ? "รอระยะ ToF ที่ใช้ได้" :
         dfsStatus === "waiting_telemetry" ? "หยุดล้อชั่วคราว · รอข้อมูลเซนเซอร์ใหม่" :
         dfsStatus === "waiting_slam_scan" ? "รอข้อมูล SLAM ใหม่หลังเดิน" :
+        dfsStatus === "inspecting_wall_target" ? "หยุดนิ่ง · ก้มกล้องตรวจเป้าที่กำแพง" :
         dfsStatus === "aligning" ? "จัดตำแหน่งกลางช่องจากกำแพง" : dfsStatus;
       document.getElementById("map-message").textContent = map.exploration?.error || `scan ${map.scan_count ?? 0} · match ${map.localization_score ?? "—"}`;
       let poseText = map.pose ? `X ${number(map.pose[0])} · Y ${number(map.pose[1])} · Yaw chassis ${number(map.pose[2])}°` : "รอ pose จาก SLAM";
@@ -554,6 +572,13 @@
         document.getElementById("tof").textContent = tofValue > 0 ? `${number(tofValue, 0)} mm` : "— mm";
         document.getElementById("gimbal-angle").textContent = status.streams.gimbal ? `yaw เทียบรถ ${number(status.streams.gimbal[1])}° · pitch เทียบรถ ${number(status.streams.gimbal[0])}° · pitch อ้างอิง ${number(status.streams.gimbal[2])}°` : "—";
         document.getElementById("camera-note").textContent = status.camera_error || (status.camera_ready ? "ภาพกำลังอัปเดต" : "รอภาพจากกล้อง…");
+        const targetNames={red:"แดง",green:"เขียว",yellow:"เหลือง",blue:"น้ำเงิน",circle:"วงกลม",square:"สี่เหลี่ยมจัตุรัส",horizontal:"สี่เหลี่ยมแนวนอน",vertical:"สี่เหลี่ยมแนวตั้ง"};
+        const seenTargets=status.camera_targets || [];
+        document.getElementById("camera-targets").textContent = !status.exploration?.target_inspection_enabled
+          ? "เป้าในภาพ: ปิดการตรวจ" : !status.camera_ready
+          ? "เป้าในภาพ: รอภาพกล้อง" : seenTargets.length
+          ? `เป้าในภาพ ${seenTargets.length} อัน: `+seenTargets.map(item=>`${targetNames[item.color] || item.color} ${targetNames[item.shape] || item.shape}`).join(" · ")
+          : "เป้าในภาพ: ยังไม่พบสีและรูปร่างที่เลือก";
         document.getElementById("graph-summary").textContent = `ชี้กราฟเพื่ออ่านค่า · CSV ข้าม ${status.dropped_csv_rows} แถว`;
         document.getElementById("dfs-status").textContent = status.exploration?.status || (status.slam ? (status.slam.ready ? "SLAM ready" : "SLAM waiting") : "ปิด");
         if (status.slam?.error) document.getElementById("map-message").textContent = `หยุด SLAM: ${status.slam.error}`;
@@ -564,7 +589,7 @@
             `gimbal yaw ${number(alignment.actual_yaw_deg)}° / ${number(alignment.target_yaw_deg)}° (±${number(alignment.yaw_tolerance_deg)}°)` +
             ` · pitch ${number(alignment.actual_pitch_deg)}° / ${number(alignment.target_pitch_deg)}° (±${number(alignment.pitch_tolerance_deg)}°)`;
         }
-        if (status.slam?.waiting_telemetry && !status.slam.error) document.getElementById("map-message").textContent = "ข้อมูลเซนเซอร์ขาดช่วง · หยุดล้อและรอข้อมูลใหม่";
+        if (status.slam?.waiting_telemetry && !status.slam.error && !status.slam.mapping_paused) document.getElementById("map-message").textContent = "ข้อมูลเซนเซอร์ขาดช่วง · หยุดล้อและรอข้อมูลใหม่";
         if (status.slam?.tof_waiting && !status.slam.error && !status.slam.waiting_telemetry) document.getElementById("map-message").textContent = "รอ ToF ค่าที่ใช้ได้ · ยังไม่ใช้ 0 มม. ตัดสินใจเดิน";
       } catch (error) {
         document.getElementById("connection").textContent = "● ขาดการเชื่อมต่อ";

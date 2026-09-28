@@ -97,11 +97,30 @@ class RunStore:
                                "message": f"Alignment {cell}: {alignment.get('reason') or alignment['status']}"})
         motion_stop = (summary.get("exploration") or {}).get("last_motion_stop") or {}
         if motion_stop.get("center_confirmed") is False:
-            issues.append({"level": "error", "time_s": None,
-                           "message": "Emergency stop left cell {} center unconfirmed "
-                                      "({:.3f} m from planned center)".format(
+            issues.append({"level": "warning", "time_s": None,
+                           "message": "Emergency stop at cell {} was {:.3f} m from planned center".format(
                                           motion_stop.get("center_cell"),
                                           motion_stop.get("planned_center_error_m", 0.0))})
+        for inspection in (summary.get("exploration") or {}).get("wall_inspections", []):
+            if inspection.get("status") == "stopped":
+                issues.append({"level": "error", "time_s": None,
+                               "message": "Target inspection stopped at cell {} direction {}: {}".format(
+                                   inspection.get("cell"), inspection.get("direction"),
+                                   inspection.get("reason", "unknown cause"))})
+            for target in inspection.get("targets", []):
+                if target.get("status") not in ("fire_command_accepted",):
+                    issues.append({"level": "warning", "time_s": None,
+                                   "message": "Target {} / {} at cell {}: {}".format(
+                                       target.get("color"), target.get("shape"),
+                                       inspection.get("cell"), target.get("status"))})
+        progress = (summary.get("exploration") or {}).get("target_progress") or {}
+        if progress.get("status") == "stopped" and progress.get("interrupted_from"):
+            issues.append({"level": "warning", "time_s": None,
+                           "message": "Target inspection interrupted at cell {} direction {} while {} "
+                                      "(action {})".format(progress.get("cell"),
+                                                           progress.get("direction"),
+                                                           progress["interrupted_from"],
+                                                           progress.get("action_state"))})
         for end in ("rear", "front"):
             for recovery in summary.get(end + "_ir_recoveries", []):
                 issues.append({"level": "warning" if recovery["status"] != "cleared" else "info",
