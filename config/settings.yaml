@@ -53,7 +53,7 @@ review:
 
 rear_ir:
   enabled: true
-  right: {id: 3, port: 2, active_io: 1} # หลังขวา: io_1; พบวัตถุเป็น IO=0 ตามข้อมูลล่าสุด
+  right: {id: 3, port: 2, active_io: 0} # หลังขวา: io_1; พบวัตถุเป็น IO=0 ตามข้อมูลล่าสุด
   left: {id: 4, port: 1, active_io: 0}  # ซ้าย: polarity กลับด้านจากขวาตามการทดสอบล่าสุด
   max_age_s: 0.5          # ข้อมูลเก่ากว่านี้หยุดการถอย/สไลด์/หมุนจนได้ค่าใหม่
   recovery_speed_m_s: 0.08 # ครั้ง 1 หลบข้าง, ครั้ง 2 หน้า, ครั้ง 3 ทแยง; ทั้งคู่ไปหน้า
@@ -117,7 +117,7 @@ exploration:
     pitch_tolerance_deg: 8 # telemetry เปลี่ยนตาม yaw สูงสุดราว 7.1°; yaw ยังใช้ tolerance 3°
   target_inspection:
     enabled: true           # ตรวจทุกขอบที่เป็นกำแพงหนึ่งครั้งขณะ DFS หยุดนิ่ง
-    pitch_deg: -15.0        # มุมก้มที่คำสั่งกิมบอลแสดงใน pitch_ground; ตรวจทิศจริงก่อนยิง
+    pitch_deg: -20.0        # มุมก้มที่คำสั่งกิมบอลแสดงใน pitch_ground; ตรวจทิศจริงก่อนยิง
     selected: all           # all หรือรายการ เช่น [red:circle, blue:vertical]
     min_area_fraction: 0.02 # ขั้นต่ำ 2% ของภาพ; 360p ประมาณ 4608 px² มากกว่าเกณฑ์เดิม
     confirm_frames: 3       # ต้องเห็นสี/รูปร่างเดิมต่อเนื่องก่อนเล็ง
