@@ -86,6 +86,13 @@ def main():
                                   explorer=explorer, motion_settings=logger.motion_settings,
                                   rear_ir=chassis.rear_ir, front_ir=chassis.front_ir)
             dashboard.start()
+            if explorer is not None and exploration_settings["target_inspection"]["enabled"]:
+                from robomaster import blaster as sdk_blaster
+                from src.target_inspection import WallTargetInspector
+                explorer.target_inspector = WallTargetInspector(
+                    explorer.gimbal, ep_robot.blaster, dashboard, logger, chassis,
+                    slam_worker, exploration_settings, sdk_blaster.INFRARED_FIRE,
+                    on_progress=explorer._set_target_progress)
             host = config["dashboard"]["host"]
             port = config["dashboard"]["port"]
             print(f"Dashboard: http://{host}:{port}")

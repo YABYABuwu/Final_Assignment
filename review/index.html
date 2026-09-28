@@ -433,6 +433,22 @@
             (motionStop.center_confirmed === false ? ", งดเดินต่อ" : "");
           wallPanel.append(note);
         }
+        const inspections=run.summary.exploration?.wall_inspections || [];
+        if (inspections.length) {
+          const title=document.createElement("p");
+          const shots=inspections.flatMap(item=>item.targets || []).filter(item=>item.status === "fire_command_accepted").length;
+          title.textContent=`ตรวจเป้าที่กำแพง ${inspections.length} ขอบ · SDK รับคำสั่งยิง infrared ${shots} ครั้ง (ยังไม่ยืนยันว่าโดนเป้า)`;
+          wallPanel.append(title);
+          const list=document.createElement("ul");
+          for (const item of inspections) {
+            const row=document.createElement("li");
+            row.textContent=`ช่อง ${item.cell?.join(",")} ทิศ ${item.direction?.join(",")} · ${item.status}`+
+              (item.targets?.length ? ` · ${item.targets.map(target=>`${target.color || "—"}/${target.shape || "—"}: ${target.status}${target.area_fraction != null ? ` (${(target.area_fraction*100).toFixed(1)}% ของภาพ)` : ""}`).join(", ")}` : "")+
+              (item.reason ? ` · ${item.reason}` : "");
+            list.append(row);
+          }
+          wallPanel.append(list);
+        }
         const table=document.createElement("table"); table.style.width="100%";
         const header=document.createElement("tr");
         ["ช่อง", "หน้า +X", "ซ้าย −Y", "หลัง −X", "ขวา +Y"].forEach(label=>{const th=document.createElement("th");th.textContent=label;header.append(th);});table.append(header);

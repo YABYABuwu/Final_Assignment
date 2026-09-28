@@ -133,6 +133,7 @@ class ExplorationTests(unittest.TestCase):
         self.settings["tof_median_window"] = 1
         self.settings["alignment"].update({"enabled": True, "wall_distance_m": .25,
                                            "tolerance_m": .03, "max_shift_m": .20})
+        self.settings["target_inspection"]["enabled"] = False
         self.ranges = [2000, 2000, 2000, 2000]
 
     def make_map(self):
@@ -476,6 +477,53 @@ class ExplorationTests(unittest.TestCase):
         current = next(cell for cell in result["cell_grid"]["cells"] if cell["index"] == [0, 0])
         self.assertTrue(all(side["state"] == "wall" for side in current["sides"].values()))
 
+    def test_wall_target_inspection_checks_each_wall_face_once(self):
+        settings = copy.deepcopy(self.settings)
+        settings["target_inspection"]["enabled"] = True
+        checked = []
+
+        def inspect(node, delta, world_yaw, body_yaw):
+            checked.append((node, delta))
+            return {"cell": list(node), "direction": list(delta),
+                    "status": "no_target", "targets": []}
+
+        explorer = DFSExplorer(None, None, FakeLogger(), self.make_map(), settings,
+                               target_inspector=SimpleNamespace(inspect=inspect))
+        explorer.base_pose = (0, 0, 0)
+        explorer.wall_grid.observe((0, 0), (1, 0), .2, 125, 300, time.time())
+        def fresh_wall(node, neighbor):
+            delta = (neighbor[0] - node[0], neighbor[1] - node[1])
+            explorer.wall_grid.observe(node, delta, .2, 125, 300, time.time())
+            return False
+
+        with patch.object(explorer, "_current_yaw", return_value=0), \
+                patch.object(explorer, "_can_step", side_effect=fresh_wall):
+            explorer._inspect_walls((0, 0))
+            explorer._inspect_walls((0, 0))
+            explorer._inspect_walls((1, 0))
+        self.assertEqual(checked, [((0, 0), (1, 0)), ((1, 0), (-1, 0))])
+        self.assertEqual(explorer.snapshot()["wall_inspections"][0]["status"], "no_target")
+
+    def test_wall_target_inspection_skips_wall_that_reopened(self):
+        settings = copy.deepcopy(self.settings)
+        settings["target_inspection"]["enabled"] = True
+        calls = []
+        explorer = DFSExplorer(None, None, FakeLogger(), self.make_map(), settings,
+                               target_inspector=SimpleNamespace(
+                                   inspect=lambda *args: calls.append(args)))
+        explorer.base_pose = (0, 0, 0)
+        explorer.wall_grid.observe((0, 0), (1, 0), .2, 125, 300, time.time())
+
+        def reopen(node, neighbor):
+            explorer.wall_grid.observe(node, (1, 0), 2, 1925, 300, time.time())
+            return True
+
+        with patch.object(explorer, "_can_step", side_effect=reopen):
+            explorer._inspect_walls((0, 0))
+        self.assertEqual(calls, [])
+        self.assertEqual(explorer.snapshot()["wall_inspections"][0]["status"],
+                         "wall_no_longer_present")
+
     def test_alignment_uses_center_distance_and_keeps_corrected_return_target(self):
         slam_map = self.make_map()
         logger = FakeLogger()
@@ -793,6 +841,8 @@ class ExplorationTests(unittest.TestCase):
                 patch.object(explorer, "_motion_pose", return_value=(0, 0, 0)), \
                 patch.object(explorer, "_scan_all_directions", return_value={
                     delta: delta == (1, 0) for delta in explorer.DIRECTIONS}), \
+                patch.object(explorer.wall_grid, "can_cross",
+                             side_effect=lambda node, delta: delta == (1, 0)), \
                 patch.object(explorer, "_move", side_effect=move):
             with self.assertRaisesRegex(MissionStop, "off cell center"):
                 explorer.run(FakeSlamWorker())
@@ -1489,6 +1539,43 @@ class ExplorationTests(unittest.TestCase):
                 time.sleep(.02)
             self.assertFalse(worker.status()["waiting_telemetry"])
             self.assertGreaterEqual(worker.map.scan_count, 2)
+        finally:
+            worker.stop()
+
+    def test_slam_skips_downward_tof_and_resumes_horizontal_mapping(self):
+        settings = copy.deepcopy(self.settings)
+        settings["update_hz"] = 30
+        logger = FakeLogger()
+        slam_map = OccupancyGridSLAM(settings)
+        worker = SlamWorker(logger, slam_map, settings)
+
+        def publish(pitch, distance):
+            timestamp = time.time()
+            for name, value in (("position", (0, 0, 0)), ("attitude", (0, 0, 0)),
+                                ("tof", (distance,)), ("gimbal", (pitch, 0, pitch, 0)),
+                                ("status", (0,) * 10)):
+                logger.set(name, value, timestamp)
+
+        publish(0, 900)
+        worker.start()
+        try:
+            worker.wait_ready(timeout_s=2)
+            initial_scans = slam_map.scan_count
+            worker.pause_mapping()
+            publish(-15, 100)
+            time.sleep(.15)
+            self.assertEqual(slam_map.scan_count, initial_scans)
+            self.assertTrue(worker.status()["mapping_paused"])
+            worker.resume_mapping()
+            time.sleep(.1)
+            self.assertEqual(slam_map.scan_count, initial_scans)
+            publish(0, 800)
+            for _ in range(30):
+                if slam_map.scan_count > initial_scans:
+                    break
+                time.sleep(.02)
+            self.assertGreater(slam_map.scan_count, initial_scans)
+            self.assertEqual(slam_map.latest_range_mm, 800)
         finally:
             worker.stop()
 

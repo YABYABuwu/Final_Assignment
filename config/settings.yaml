@@ -115,6 +115,22 @@ exploration:
     yaw_speed_deg_s: 120
     angle_tolerance_deg: 3 # tolerance ของ yaw
     pitch_tolerance_deg: 8 # telemetry เปลี่ยนตาม yaw สูงสุดราว 7.1°; yaw ยังใช้ tolerance 3°
+  target_inspection:
+    enabled: true           # ตรวจทุกขอบที่เป็นกำแพงหนึ่งครั้งขณะ DFS หยุดนิ่ง
+    pitch_deg: -15.0        # ก้มกล้องเทียบตัวรถ; ต้องตรวจทิศจริงบนหุ่นก่อนยิง
+    selected: all           # all หรือรายการ เช่น [red:circle, blue:vertical]
+    min_area_fraction: 0.02 # ขั้นต่ำ 2% ของภาพ; 360p ประมาณ 4608 px² มากกว่าเกณฑ์เดิม
+    confirm_frames: 3       # ต้องเห็นสี/รูปร่างเดิมต่อเนื่องก่อนเล็ง
+    lock_frames: 3          # ต้องอยู่กลางภาพต่อเนื่องก่อนสั่งยิง
+    center_radius_fraction: 0.04
+    aim_offset_x_fraction: 0.0 # ปรับจุดเล็ง IR เทียบกึ่งกลางภาพหลังทดลองระยะใกล้
+    aim_offset_y_fraction: 0.0
+    max_aim_steps: 12       # จำนวนคำสั่งกิมบอลสูงสุดต่อเป้า ไม่ใช่ timeout
+    max_targets_per_wall: 4
+    max_step_deg: 6.0       # จำกัดการปรับหัวแต่ละครั้ง
+    camera_hfov_deg: 90.0   # ค่าเริ่มทดลอง ต้องสอบเทียบภาพจริง
+    camera_vfov_deg: 60.0
+    fire_mode: infrared
   map:
     resolution_m: 0.05
     width_m: 8.0

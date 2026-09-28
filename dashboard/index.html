@@ -87,7 +87,7 @@
           <label class="muted"><input id="fine-map" type="checkbox"> แสดง occupancy ละเอียด</label>
           <canvas id="map" aria-label="เส้นทาง ตำแหน่ง และทิศหุ่นยนต์"></canvas>
           <div class="map-legend"><span class="key" style="--key:#8cf1d2">ขอบทางเปิด</span><span class="key" style="--key:#ffb868">กำแพง</span><span class="key" style="--key:#718594">เส้นประ: ยังไม่รู้/อนุมาน</span><span class="key" style="--key:#69d9ff">เส้นทาง</span></div>
-          <div class="map-info"><div>DFS&nbsp; <strong id="dfs-status">ปิด</strong></div><div id="map-counts">รอข้อมูลแผนที่</div><div id="pose">X — · Y — · Yaw —</div><div>ความเร็ว&nbsp; <strong id="speed">— m/s</strong></div><div>อัตราเร่งสไลด์ซ้าย/ขวาสูงสุด&nbsp; <strong id="acceleration">— m/s²</strong></div><div>Gimbal&nbsp; <span id="gimbal-map">—</span></div><div>DFS เลือกขอบทางเปิดจาก ToF ที่สแกนใหม่</div><div>ทิศแผนที่: ↑ +X เหนือ · ↓ −X ใต้ · → +Y ตะวันออก</div><div id="tof-model">ToF: —</div><div id="cell-sides"></div><div id="map-message"></div></div>
+          <div class="map-info"><div>DFS&nbsp; <strong id="dfs-status">ปิด</strong></div><div id="map-counts">รอข้อมูลแผนที่</div><div id="pose">X — · Y — · Yaw —</div><div>ความเร็ว&nbsp; <strong id="speed">— m/s</strong></div><div>อัตราเร่งสไลด์ซ้าย/ขวาสูงสุด&nbsp; <strong id="acceleration">— m/s²</strong></div><div>Gimbal&nbsp; <span id="gimbal-map">—</span></div><div>DFS เลือกขอบทางเปิดจาก ToF ที่สแกนใหม่</div><div>ทิศแผนที่: ↑ +X เหนือ · ↓ −X ใต้ · → +Y ตะวันออก</div><div id="tof-model">ToF: —</div><div id="cell-sides"></div><div id="target-inspections">ตรวจเป้าที่กำแพง: รอข้อมูล</div><div id="map-message"></div></div>
         </div>
       </section>
     </div>
@@ -327,6 +327,18 @@
             ? ` · ห่างเป้ากลางช่อง ${(motionStop.planned_center_error_m*100).toFixed(1)} ซม.` : "")+
           (motionStop.center_confirmed === false ? " · งดเดินต่อ" : "");
       }
+      const inspections=map.exploration?.wall_inspections || [];
+      const accepted=inspections.flatMap(item=>item.targets || []).filter(item=>item.status === "fire_command_accepted").length;
+      const latestInspection=inspections.at(-1);
+      const progress=map.exploration?.target_progress;
+      const progressNames={pointing:"หันกล้อง",searching:"หาตัวเป้า",aiming:"เล็ง",restoring_scan_angle:"คืนมุมสแกน"};
+      document.getElementById("target-inspections").textContent = map.exploration?.target_inspection_enabled
+        ? `ตรวจเป้าที่กำแพง ${inspections.length} ขอบ · SDK รับคำสั่งยิง infrared ${accepted} ครั้ง`+
+          (progressNames[progress?.status]
+            ? ` · ${progressNames[progress.status]} ช่อง ${progress.cell?.join(",")} ทิศ ${progress.direction?.join(",")} ${progress.target ? `(${progress.target.color}/${progress.target.shape})` : ""}` : "")+
+          (latestInspection ? ` · ล่าสุดช่อง ${latestInspection.cell?.join(",")} ทิศ ${latestInspection.direction?.join(",")} ${latestInspection.status}`+
+            (latestInspection.targets?.length ? ` · ${latestInspection.targets.map(item=>`${item.color || "—"}/${item.shape || "—"}: ${item.status}`).join(", ")}` : "") : "")
+        : "ตรวจเป้าที่กำแพง: ปิด";
       const route = map.trajectory || [];
       if (route.length) {
         ctx.beginPath();
@@ -385,6 +397,7 @@
         dfsStatus === "waiting_tof" ? "รอระยะ ToF ที่ใช้ได้" :
         dfsStatus === "waiting_telemetry" ? "หยุดล้อชั่วคราว · รอข้อมูลเซนเซอร์ใหม่" :
         dfsStatus === "waiting_slam_scan" ? "รอข้อมูล SLAM ใหม่หลังเดิน" :
+        dfsStatus === "inspecting_wall_target" ? "หยุดนิ่ง · ก้มกล้องตรวจเป้าที่กำแพง" :
         dfsStatus === "aligning" ? "จัดตำแหน่งกลางช่องจากกำแพง" : dfsStatus;
       document.getElementById("map-message").textContent = map.exploration?.error || `scan ${map.scan_count ?? 0} · match ${map.localization_score ?? "—"}`;
       let poseText = map.pose ? `X ${number(map.pose[0])} · Y ${number(map.pose[1])} · Yaw chassis ${number(map.pose[2])}°` : "รอ pose จาก SLAM";
@@ -564,7 +577,7 @@
             `gimbal yaw ${number(alignment.actual_yaw_deg)}° / ${number(alignment.target_yaw_deg)}° (±${number(alignment.yaw_tolerance_deg)}°)` +
             ` · pitch ${number(alignment.actual_pitch_deg)}° / ${number(alignment.target_pitch_deg)}° (±${number(alignment.pitch_tolerance_deg)}°)`;
         }
-        if (status.slam?.waiting_telemetry && !status.slam.error) document.getElementById("map-message").textContent = "ข้อมูลเซนเซอร์ขาดช่วง · หยุดล้อและรอข้อมูลใหม่";
+        if (status.slam?.waiting_telemetry && !status.slam.error && !status.slam.mapping_paused) document.getElementById("map-message").textContent = "ข้อมูลเซนเซอร์ขาดช่วง · หยุดล้อและรอข้อมูลใหม่";
         if (status.slam?.tof_waiting && !status.slam.error && !status.slam.waiting_telemetry) document.getElementById("map-message").textContent = "รอ ToF ค่าที่ใช้ได้ · ยังไม่ใช้ 0 มม. ตัดสินใจเดิน";
       } catch (error) {
         document.getElementById("connection").textContent = "● ขาดการเชื่อมต่อ";

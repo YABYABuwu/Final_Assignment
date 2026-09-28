@@ -35,6 +35,7 @@ review.py → RunStore(data/raw) → /api/runs, /api/run, /api/csv → review/in
 | `src/dashboard.py`, `dashboard/index.html` | server ภาพสดและ telemetry; `/api/status` ส่งค่าล่าสุด, `/api/history` ส่งจุดใหม่พร้อมชื่อคอลัมน์, `/video` ส่ง MJPEG |
 | `src/slam.py` | `CellWallGrid` เก็บ occupancy ของขอบช่องที่ใช้ร่วมกัน; `OccupancyGridSLAM` ฉายลำแสง ToF เดี่ยว โดยใช้ pose, มุม yaw ของ gimbal และ offset จากแกน yaw; `SlamWorker` เลือก ToF channel ตาม config, อ่าน sample timestamp ใกล้กันและทำงานเบื้องหลัง |
 | `src/explorer.py` | `DFSExplorer` หัน gimbal ดูเพื่อนบ้านครบ 4 ทิศเมื่อเข้าช่องใหม่, รอ angle telemetry, action สำเร็จ และ median ของ ToF scan ใหม่ 3 ครั้งที่ตรงทิศ; ก่อนเดินไปช่องใหม่ตรวจ ToF เทียบเกณฑ์กำแพงด้วย scan สดหนึ่งครั้งแล้วใช้ผลนั้นเริ่มเดิน โดยไม่มีการสั่ง scan ทิศเดิมซ้ำ ทางกลับใช้ขอบเปิดที่บันทึกไว้และหัน ToF ตามทิศเดินหนึ่งทิศเพื่อเฝ้าระยะ โดยไม่สแกนสี่ทิศซ้ำ; ก่อนเคลื่อนที่แต่ละช่วงจับ yaw สดแล้วส่งเป็นเป้าหมายคงที่ให้ `ChassisController.move_to()` และหยุดเมื่อ telemetry/status/ทางกลับไม่ผ่านเกณฑ์ |
+| `src/targets.py`, `src/target_inspection.py` | ตรวจ HSV สีและรูปร่างจากภาพ BGR ของ dashboard, ติดตาม contour ข้ามภาพ, เล็งด้วย gimbal action ที่รอ SDK ปลด action และส่งคำสั่ง infrared หนึ่งครั้งเมื่อเป้าอยู่ที่จุดเล็งต่อเนื่อง; DFS เรียกหลังสแกน/จัดกลางช่องสำหรับหน้าผนังที่วัดตรง |
 | `src/run_review.py`, `review/index.html`, `review.py` | อ่าน run จาก CSV/summary, ส่งข้อมูลตัวอย่างให้กราฟ, ดาวน์โหลด CSV เต็ม, แสดงปัญหาบางประเภทและการเล่นย้อนหลัง |
 | `tests/` | ทดสอบ config, PID, logger, controller, dashboard และ review ด้วย fake robot/ข้อมูลชั่วคราว |
 
@@ -63,6 +64,7 @@ review.py → RunStore(data/raw) → /api/runs, /api/run, /api/csv → review/in
 | ToF ช่องที่ตั้งใน `exploration.sensor.tof_channel` | ตัวเลขบนภาพกล้องและตำแหน่งหัวเซนเซอร์บนแผนที่ | CSV มีครบสี่ช่องจาก SDK; review แสดงช่อง 0 เป็นค่าเริ่มต้น |
 | status | กราฟทั่วไป | เหตุ picked up/slip/impact/roll over |
 | camera | MJPEG สดใน RAM | ไม่มีภาพย้อนหลัง |
+| เป้าที่ผนัง | ขั้นตอนตรวจผนัง สี/รูปร่าง และจำนวนคำสั่งยิงที่ SDK รับ | ผลตรวจแต่ละหน้าผนังใน run summary; ไม่เก็บภาพย้อนหลัง |
 | mission | ข้อความ `mission_status` ใน RAM | สถานะ/error ระดับ run ใน summary |
 | exploration | กริดกำแพงสี่ด้าน, occupancy ละเอียด, trajectory, DFS status | กริดสุดท้ายใน summary และตารางกำแพงใน review; JSON export มีทั้งสองกริด |
 

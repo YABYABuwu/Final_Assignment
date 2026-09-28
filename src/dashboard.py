@@ -29,6 +29,7 @@ class Dashboard:
         self.running = threading.Event()
         self.frame_changed = threading.Condition()
         self.latest_jpeg = None
+        self.latest_frame = None
         self.frame_number = 0
         self.camera_error = None
         self.mission_status = "Ready"
@@ -54,6 +55,7 @@ class Dashboard:
                     if ok:
                         with self.frame_changed:
                             self.latest_jpeg = encoded.tobytes()
+                            self.latest_frame = image.copy() if hasattr(image, "copy") else image
                             self.frame_number += 1
                             self.frame_changed.notify_all()
             except Exception as error:
@@ -65,6 +67,22 @@ class Dashboard:
             remaining = period - (time.monotonic() - started)
             if remaining > 0:
                 time.sleep(remaining)
+
+    def wait_for_frame(self, after_number=0, check_health=None):
+        """Return a fresh BGR frame without starting a second SDK camera reader."""
+        with self.frame_changed:
+            while self.running.is_set() and self.camera_error is None:
+                if check_health is not None:
+                    check_health()
+                if self.frame_number > after_number and self.latest_frame is not None:
+                    frame = self.latest_frame
+                    return self.frame_number, frame.copy() if hasattr(frame, "copy") else frame
+                self.frame_changed.wait(0.1)
+        raise MissionStop(self.camera_error or "camera stream stopped during target inspection")
+
+    def current_frame_number(self):
+        with self.frame_changed:
+            return self.frame_number
 
     def snapshot(self):
         """Build a JSON friendly snapshot without touching the camera or disk."""

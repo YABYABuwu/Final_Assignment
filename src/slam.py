@@ -810,6 +810,7 @@ class SlamWorker:
         self.last_tof_timestamp = None
         self.error = None
         self.waiting_telemetry = False
+        self.mapping_paused = False
         self.lock = threading.Lock()
         self.abort_event = threading.Event()
         self.started_at = None
@@ -826,6 +827,7 @@ class SlamWorker:
         self.last_tof_timestamp = None
         self.error = None
         self.waiting_telemetry = False
+        self.mapping_paused = False
         self.is_running = True
         self.thread = threading.Thread(target=self._run, name="slam-map-updater", daemon=True)
         self.thread.start()
@@ -861,7 +863,15 @@ class SlamWorker:
                     timestamps = (position[1], attitude[1], timestamp,
                                   gimbal_timestamp, status[1])
                     synchronized = max(timestamps) - min(timestamps) <= self.settings["sample_skew_s"]
-                    if not synchronized:
+                    with self.lock:
+                        mapping_paused = self.mapping_paused
+                    try:
+                        pitch_aligned = (abs(float(gimbal_values[0]) -
+                                             self.settings["gimbal"]["pitch_deg"]) <=
+                                         self.settings["gimbal"]["pitch_tolerance_deg"])
+                    except (TypeError, ValueError):
+                        pitch_aligned = False
+                    if not synchronized or mapping_paused or not pitch_aligned:
                         with self.lock:
                             self.waiting_telemetry = True
                     elif timestamp != self.last_tof_timestamp:
@@ -902,6 +912,15 @@ class SlamWorker:
         self.abort_event.set()
         self.stop_event.set()
 
+    def pause_mapping(self):
+        with self.lock:
+            self.mapping_paused = True
+            self.waiting_telemetry = True
+
+    def resume_mapping(self):
+        with self.lock:
+            self.mapping_paused = False
+
     def wait_ready(self, timeout_s=None):
         deadline = None if timeout_s is None else time.monotonic() + timeout_s
         while not self.ready.is_set():
@@ -933,10 +952,12 @@ class SlamWorker:
         with self.lock:
             error = self.error
             waiting_telemetry = self.waiting_telemetry
+            mapping_paused = self.mapping_paused
         tof = self.logger.get_sample("tof", max_age_s=self.settings["max_sample_age_s"])
         channel = int(self.settings["sensor"]["tof_channel"])
         tof_waiting = (tof is None or len(tof[0]) <= channel or
                        self.map._range_value(tof[0][channel]) is None)
         return {"running": self.is_running, "ready": self.ready.is_set(),
                 "error": error, "tof_waiting": tof_waiting,
-                "waiting_telemetry": waiting_telemetry}
+                "waiting_telemetry": waiting_telemetry,
+                "mapping_paused": mapping_paused}

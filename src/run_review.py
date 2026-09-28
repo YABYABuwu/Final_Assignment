@@ -102,6 +102,18 @@ class RunStore:
                                       "({:.3f} m from planned center)".format(
                                           motion_stop.get("center_cell"),
                                           motion_stop.get("planned_center_error_m", 0.0))})
+        for inspection in (summary.get("exploration") or {}).get("wall_inspections", []):
+            if inspection.get("status") == "stopped":
+                issues.append({"level": "error", "time_s": None,
+                               "message": "Target inspection stopped at cell {} direction {}: {}".format(
+                                   inspection.get("cell"), inspection.get("direction"),
+                                   inspection.get("reason", "unknown cause"))})
+            for target in inspection.get("targets", []):
+                if target.get("status") not in ("fire_command_accepted",):
+                    issues.append({"level": "warning", "time_s": None,
+                                   "message": "Target {} / {} at cell {}: {}".format(
+                                       target.get("color"), target.get("shape"),
+                                       inspection.get("cell"), target.get("status"))})
         for end in ("rear", "front"):
             for recovery in summary.get(end + "_ir_recoveries", []):
                 issues.append({"level": "warning" if recovery["status"] != "cleared" else "info",

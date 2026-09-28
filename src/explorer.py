@@ -14,7 +14,7 @@ class DFSExplorer:
 
     DIRECTIONS = ((1, 0), (0, -1), (-1, 0), (0, 1))
 
-    def __init__(self, chassis, gimbal, logger, slam_map, settings):
+    def __init__(self, chassis, gimbal, logger, slam_map, settings, target_inspector=None):
         self.chassis = chassis
         self.gimbal = gimbal
         self.logger = logger
@@ -34,6 +34,9 @@ class DFSExplorer:
         self.last_motion_stop = None
         self.center_pending = None
         self.scan_alignment = None
+        self.target_inspector = target_inspector
+        self.wall_inspections = {}
+        self.target_progress = None
         self.wall_grid = CellWallGrid(
             settings["step_m"], min(1000, math.ceil(math.hypot(
                 settings["map"]["width_m"], settings["map"]["height_m"]
@@ -69,7 +72,10 @@ class DFSExplorer:
                 "cell_targets": {f"{node[0]},{node[1]}": list(point)
                                  for node, point in sorted(self.cell_targets.items())},
                 "alignments": {f"{node[0]},{node[1]}": result
-                               for node, result in sorted(self.alignments.items())},
+                                   for node, result in sorted(self.alignments.items())},
+                "target_inspection_enabled": self.settings["target_inspection"]["enabled"],
+                "wall_inspections": [value for _, value in sorted(self.wall_inspections.items())],
+                "target_progress": self.target_progress,
                 "max_nodes": self.settings["max_nodes"],
                 "cell_grid": self.wall_grid.snapshot(self.base_pose, self.current_cell),
             }
@@ -603,6 +609,54 @@ class DFSExplorer:
         self._set_status(previous_status)
         return clear
 
+    def _inspect_walls(self, node):
+        if not self.settings["target_inspection"]["enabled"]:
+            return
+        if self.target_inspector is None:
+            raise MissionStop("target inspection needs the dashboard camera and infrared blaster")
+        for delta in self.DIRECTIONS:
+            key = (tuple(node), delta)
+            with self.lock:
+                edge = self.wall_grid.edges.get(CellWallGrid.edge_key(node, delta), {})
+                if (edge.get("state") != "wall" or edge.get("source") != "direct" or
+                        key in self.wall_inspections):
+                    continue
+                self.wall_inspections[key] = {
+                    "cell": list(node), "direction": list(delta),
+                    "status": "checking", "targets": []}
+            self._set_status("inspecting_wall_target")
+            try:
+                neighbor = (node[0] + delta[0], node[1] + delta[1])
+                self._can_step(node, neighbor)
+                with self.lock:
+                    fresh_check = self.wall_grid.checks.get((tuple(node), delta))
+                    fresh_state = self.wall_grid.state(node, delta)
+                if fresh_check is None:
+                    raise MissionStop("wall target inspection needs a fresh ToF wall check")
+                if fresh_state != "wall":
+                    with self.lock:
+                        self.wall_inspections[key]["status"] = "wall_no_longer_present"
+                    self.map.set_exploration_state(self.snapshot())
+                    continue
+                body_yaw = self._current_yaw()
+                world_yaw = self.base_pose[2] + math.degrees(math.atan2(delta[1], delta[0]))
+                result = self.target_inspector.inspect(node, delta, world_yaw, body_yaw)
+            except MissionStop as error:
+                with self.lock:
+                    self.wall_inspections[key]["status"] = "stopped"
+                    self.wall_inspections[key]["reason"] = str(error)
+                self.map.set_exploration_state(self.snapshot())
+                raise
+            with self.lock:
+                self.wall_inspections[key] = result
+            self.map.set_exploration_state(self.snapshot())
+        self._set_status("exploring")
+
+    def _set_target_progress(self, progress):
+        with self.lock:
+            self.target_progress = progress
+        self.map.set_exploration_state(self.snapshot())
+
     def _can_return(self, child, parent):
         """Check the shared map edge without moving the gimbal again."""
         worker_status = self.slam_worker.status() if self.slam_worker is not None else None
@@ -841,6 +895,9 @@ class DFSExplorer:
                     clear = {delta: self.wall_grid.can_cross(current, delta)
                              for delta in self.DIRECTIONS}
                     self._set_status("exploring")
+                self._inspect_walls(current)
+                clear = {delta: self.wall_grid.can_cross(current, delta)
+                         for delta in self.DIRECTIONS}
                 moved_to = None
                 for delta in self.DIRECTIONS:
                     neighbor = (current[0] + delta[0], current[1] + delta[1])
