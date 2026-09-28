@@ -434,6 +434,7 @@
           wallPanel.append(note);
         }
         const inspections=run.summary.exploration?.wall_inspections || [];
+        const targetProgress=run.summary.exploration?.target_progress;
         if (inspections.length) {
           const title=document.createElement("p");
           const shots=inspections.flatMap(item=>item.targets || []).filter(item=>item.status === "fire_command_accepted").length;
@@ -444,6 +445,8 @@
             const row=document.createElement("li");
             row.textContent=`ช่อง ${item.cell?.join(",")} ทิศ ${item.direction?.join(",")} · ${item.status}`+
               (item.targets?.length ? ` · ${item.targets.map(target=>`${target.color || "—"}/${target.shape || "—"}: ${target.status}${target.area_fraction != null ? ` (${(target.area_fraction*100).toFixed(1)}% ของภาพ)` : ""}`).join(", ")}` : "")+
+              (item.status === "checking" && targetProgress?.interrupted_from && item.cell?.join(",") === targetProgress.cell?.join(",") && item.direction?.join(",") === targetProgress.direction?.join(",")
+                ? ` · หยุดขณะ ${targetProgress.interrupted_from}${targetProgress.action_state ? ` (${targetProgress.action_state})` : ""}` : "")+
               (item.reason ? ` · ${item.reason}` : "");
             list.append(row);
           }

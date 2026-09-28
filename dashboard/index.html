@@ -331,12 +331,13 @@
       const accepted=inspections.flatMap(item=>item.targets || []).filter(item=>item.status === "fire_command_accepted").length;
       const latestInspection=inspections.at(-1);
       const progress=map.exploration?.target_progress;
-      const progressNames={pointing:"หันกล้อง",searching:"หาตัวเป้า",aiming:"เล็ง",restoring_scan_angle:"คืนมุมสแกน",waiting_target_action:"รอ SDK ปลดคำสั่งกิมบอล",waiting_target_angle:"รอมุมกิมบอล",waiting_camera_frame:"รอภาพกล้องใหม่"};
+      const progressNames={pointing:"หันกล้อง",searching:"หาตัวเป้า",aiming:"เล็ง",restoring_scan_angle:"คืนมุมสแกน",waiting_target_action:"รอ SDK ปลดคำสั่งกิมบอล",waiting_target_angle:"รอมุมกิมบอล",waiting_camera_frame:"รอภาพกล้องใหม่",stopped:"หยุดระหว่างตรวจเป้า"};
       document.getElementById("target-inspections").textContent = map.exploration?.target_inspection_enabled
         ? `ตรวจเป้าที่กำแพง ${inspections.length} ขอบ · SDK รับคำสั่งยิง infrared ${accepted} ครั้ง`+
           (progressNames[progress?.status]
             ? ` · ${progressNames[progress.status]} ช่อง ${progress.cell?.join(",")} ทิศ ${progress.direction?.join(",")} ${progress.target ? `(${progress.target.color}/${progress.target.shape})` : ""}`+
-              (progress.target_pitch_ground_deg != null ? ` · pitch พื้น ${progress.actual_pitch_ground_deg}°/${progress.target_pitch_ground_deg}°` : "")+
+              (progress.target_pitch_deg != null ? ` · pitch ${progress.pitch_frame === "chassis" ? "ตัวรถ" : "พื้น"} ${progress.actual_pitch_deg}°/${progress.target_pitch_deg}°` : "")+
+              (progress.interrupted_from ? ` · ค้างที่ ${progressNames[progress.interrupted_from] || progress.interrupted_from}` : "")+
               (progress.action_state ? ` · action ${progress.action_state}` : "") : "")+
           (latestInspection ? ` · ล่าสุดช่อง ${latestInspection.cell?.join(",")} ทิศ ${latestInspection.direction?.join(",")} ${latestInspection.status}`+
             (latestInspection.targets?.length ? ` · ${latestInspection.targets.map(item=>`${item.color || "—"}/${item.shape || "—"}: ${item.status}`).join(", ")}` : "") : "")

@@ -90,9 +90,9 @@ def main():
                 from robomaster import blaster as sdk_blaster
                 from src.target_inspection import WallTargetInspector
                 explorer.target_inspector = WallTargetInspector(
-                    explorer.gimbal, ep_robot.blaster, dashboard, logger, chassis,
+                    ep_robot.gimbal, ep_robot.blaster, dashboard, logger, chassis,
                     slam_worker, exploration_settings, sdk_blaster.INFRARED_FIRE,
-                    on_progress=explorer._set_target_progress)
+                    on_progress=explorer._set_target_progress, scan_gimbal=explorer.gimbal)
             host = config["dashboard"]["host"]
             port = config["dashboard"]["port"]
             print(f"Dashboard: http://{host}:{port}")

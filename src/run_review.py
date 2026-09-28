@@ -114,6 +114,14 @@ class RunStore:
                                    "message": "Target {} / {} at cell {}: {}".format(
                                        target.get("color"), target.get("shape"),
                                        inspection.get("cell"), target.get("status"))})
+        progress = (summary.get("exploration") or {}).get("target_progress") or {}
+        if progress.get("status") == "stopped" and progress.get("interrupted_from"):
+            issues.append({"level": "warning", "time_s": None,
+                           "message": "Target inspection interrupted at cell {} direction {} while {} "
+                                      "(action {})".format(progress.get("cell"),
+                                                           progress.get("direction"),
+                                                           progress["interrupted_from"],
+                                                           progress.get("action_state"))})
         for end in ("rear", "front"):
             for recovery in summary.get(end + "_ir_recoveries", []):
                 issues.append({"level": "warning" if recovery["status"] != "cleared" else "info",

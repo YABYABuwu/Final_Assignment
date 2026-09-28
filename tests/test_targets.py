@@ -51,6 +51,8 @@ class FakeGimbal:
         self.active = True
         self.commands.append((pitch, yaw))
         self.logger.pitch, self.logger.yaw = pitch, yaw
+        if pitch == 0 and self.logger.chassis_pitch is not None:
+            self.logger.chassis_pitch = pitch
         self.logger.timestamp = time.time() + .01
 
         def release():
@@ -223,7 +225,8 @@ class TargetTests(unittest.TestCase):
         self.assertFalse(worker.paused)
         self.assertTrue(any(item["status"] == "waiting_camera_frame" for item in progress))
         self.assertTrue(any(item["status"] == "waiting_target_angle" and
-                            item["target_pitch_ground_deg"] == -15 for item in progress))
+                            item["pitch_frame"] == "ground" and
+                            item["target_pitch_deg"] == -15 for item in progress))
 
     def test_camera_error_does_not_overlap_running_gimbal_action(self):
         inspector, gimbal, worker, calls = self.make_inspector()
@@ -240,6 +243,48 @@ class TargetTests(unittest.TestCase):
         self.assertEqual(gimbal.commands, [(-15.0, 0)])
         self.assertEqual(calls, [])
         self.assertFalse(worker.paused)
+
+    def test_sdk_target_command_uses_ground_pitch_frame(self):
+        from robomaster import gimbal as sdk_gimbal
+
+        sent = []
+        sdk = SimpleNamespace(_action_dispatcher=SimpleNamespace(send_action=sent.append))
+        action = sdk_gimbal.Gimbal.moveto(sdk, pitch=-15, yaw=-90)
+        self.assertIs(sent[0], action)
+        self.assertEqual(action._coordinate, sdk_gimbal.COORDINATE_YCPN)
+
+    def test_restoring_scan_angle_uses_chassis_pitch_frame(self):
+        inspector, gimbal, _, _ = self.make_inspector()
+        inspector.logger.chassis_pitch = -23.6
+        scan_commands = []
+
+        def scan_move(pitch, yaw, pitch_speed, yaw_speed):
+            scan_commands.append((pitch, yaw))
+            inspector.logger.chassis_pitch = pitch
+            inspector.logger.yaw = yaw
+            inspector.logger.timestamp = time.time() + .01
+            return SimpleNamespace(has_succeeded=True, wait_for_completed=lambda: True)
+
+        inspector.scan_gimbal = SimpleNamespace(moveto=scan_move)
+        result = inspector.inspect((0, 0), (0, -1), -90, 0)
+        self.assertEqual(result["status"], "targets_checked")
+        self.assertEqual(scan_commands, [(0.0, 0)])
+        self.assertEqual(gimbal.commands[0], (-15.0, -90))
+
+    def test_interrupted_inspection_records_the_waiting_step(self):
+        inspector, _, worker, _ = self.make_inspector()
+        progress = []
+        inspector.on_progress = progress.append
+
+        def interrupted_frame(*args, **kwargs):
+            raise KeyboardInterrupt()
+
+        inspector.camera_frames.wait_for_frame = interrupted_frame
+        with self.assertRaises(KeyboardInterrupt):
+            inspector.inspect((0, 0), (0, -1), -90, 0)
+        self.assertFalse(worker.paused)
+        self.assertEqual(progress[-1]["status"], "stopped")
+        self.assertEqual(progress[-1]["interrupted_from"], "waiting_camera_frame")
 
 
 if __name__ == "__main__":
