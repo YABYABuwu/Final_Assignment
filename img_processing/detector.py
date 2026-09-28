@@ -48,11 +48,14 @@ class Detection:
 
 
 def get_camera_calibration(width: int, height: int) -> Tuple[np.ndarray, np.ndarray]:
-    """Return default camera matrix and distortion coefficients based on frame resolution."""
-    if width >= 1000:
-        return CAMERA_CALIBRATION_720P["camera_matrix"], CAMERA_CALIBRATION_720P["dist_coeffs"]
-    else:
-        return CAMERA_CALIBRATION_360P["camera_matrix"], CAMERA_CALIBRATION_360P["dist_coeffs"]
+    """Scale the 720p calibration matrix to the actual stream resolution."""
+    if width <= 0 or height <= 0:
+        raise ValueError("frame width and height must be positive")
+    camera_matrix = CAMERA_CALIBRATION_720P["camera_matrix"].copy()
+    camera_matrix[0, :] *= width / 1280.0
+    camera_matrix[1, :] *= height / 720.0
+    camera_matrix[2, :] = (0.0, 0.0, 1.0)
+    return camera_matrix, CAMERA_CALIBRATION_720P["dist_coeffs"].copy()
 
 
 def undistort_frame(frame: np.ndarray, camera_matrix: Optional[np.ndarray] = None,
@@ -383,3 +386,18 @@ class ColorShapeDetector:
 
         detections, masks = detect(proc_frame, mode=self.mode, config=self.config, undistort=False, debug=debug)
         return detections, masks, proc_frame
+
+    @staticmethod
+    def annotate(frame: np.ndarray, detections: List[Detection]) -> np.ndarray:
+        """Return a copy with compact ASCII labels suitable for the live MJPEG feed."""
+        annotated = frame.copy()
+        for detection in detections:
+            color_settings = COLORS.get(detection.color, {})
+            bgr = color_settings.get("bgr", (255, 255, 255))
+            cv2.drawContours(annotated, [detection.contour], -1, bgr, 2)
+            cv2.circle(annotated, detection.center, 4, bgr, -1)
+            x, y, _, _ = cv2.boundingRect(detection.contour)
+            label = f"{detection.color.upper()} {detection.shape.upper()} {detection.area:.0f}px2"
+            cv2.putText(annotated, label, (x, max(20, y - 7)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.50, bgr, 2, cv2.LINE_AA)
+        return annotated

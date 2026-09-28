@@ -14,7 +14,8 @@ def load_config(path=DEFAULT_CONFIG):
 
     if not isinstance(config, dict):
         raise ValueError("settings.yaml must contain a mapping")
-    for section in ("connection", "motion", "logging", "dashboard", "review", "mission", "exploration", "rear_ir", "front_ir"):
+    for section in ("connection", "motion", "logging", "dashboard", "image_processing",
+                    "review", "mission", "exploration", "rear_ir", "front_ir"):
         if not isinstance(config.get(section), dict):
             raise ValueError(f"missing config section: {section}")
     if config["connection"].get("type") not in ("ap", "sta", "rndis"):
@@ -34,6 +35,39 @@ def load_config(path=DEFAULT_CONFIG):
     quality = dashboard.get("jpeg_quality")
     if type(quality) is not int or not 1 <= quality <= 100:
         raise ValueError("dashboard.jpeg_quality must be between 1 and 100")
+
+    image_processing = config["image_processing"]
+    if not isinstance(image_processing.get("enabled"), bool):
+        raise ValueError("image_processing.enabled must be true or false")
+    if image_processing.get("mode") not in ("robust", "classic"):
+        raise ValueError("image_processing.mode must be robust or classic")
+    detection_fps = image_processing.get("detection_fps")
+    if (type(detection_fps) not in (int, float) or not math.isfinite(detection_fps) or
+            detection_fps <= 0 or detection_fps > dashboard["max_fps"]):
+        raise ValueError("image_processing.detection_fps must be positive and no greater than dashboard.max_fps")
+    stability_window = image_processing.get("stability_window")
+    stability_min_hits = image_processing.get("stability_min_hits")
+    if type(stability_window) is not int or not 1 <= stability_window <= 30:
+        raise ValueError("image_processing.stability_window must be an integer from 1 to 30")
+    if (type(stability_min_hits) is not int or
+            not 1 <= stability_min_hits <= stability_window):
+        raise ValueError("image_processing.stability_min_hits must be between 1 and stability_window")
+    if not isinstance(image_processing.get("enable_undistort"), bool):
+        raise ValueError("image_processing.enable_undistort must be true or false")
+    for name in ("min_area", "max_area"):
+        value = image_processing.get(name)
+        if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
+            raise ValueError(f"image_processing.{name} must be a positive number")
+    if image_processing["max_area"] <= image_processing["min_area"]:
+        raise ValueError("image_processing.max_area must be greater than min_area")
+    kernel_size = image_processing.get("morph_kernel_size")
+    if type(kernel_size) is not int or kernel_size < 0 or (kernel_size > 0 and kernel_size % 2 == 0):
+        raise ValueError("image_processing.morph_kernel_size must be zero or a positive odd integer")
+    iterations = image_processing.get("morph_iterations")
+    if type(iterations) is not int or iterations <= 0:
+        raise ValueError("image_processing.morph_iterations must be a positive integer")
+    if image_processing["enabled"] and not dashboard["enabled"]:
+        raise ValueError("image_processing needs dashboard.enabled: true for the camera stream")
 
     review = config["review"]
     if not isinstance(review.get("host"), str) or not review["host"]:
@@ -132,6 +166,36 @@ def load_config(path=DEFAULT_CONFIG):
         max_attempts = ir.get("recovery_max_attempts")
         if type(max_attempts) is not int or not 1 <= max_attempts <= 5:
             raise ValueError(f"{key}.recovery_max_attempts must be an integer from 1 to 5")
+        mode = ir.get("recovery_mode")
+        if mode is not None and mode not in ("cardinal", "diagonal", "forward_first", "staged"):
+            raise ValueError(
+                f"{key}.recovery_mode must be cardinal, diagonal, forward_first, or staged"
+            )
+        tof_clear = ir.get("forward_tof_clear_mm")
+        if tof_clear is not None and (type(tof_clear) not in (int, float) or not math.isfinite(tof_clear) or tof_clear <= 0):
+            raise ValueError(f"{key}.forward_tof_clear_mm must be a positive number")
+        if not isinstance(ir.get("direct_io_fallback", True), bool):
+            raise ValueError(f"{key}.direct_io_fallback must be true or false")
+        if ir.get("io_read_mode", "auto") not in ("auto", "direct", "stream"):
+            raise ValueError(f"{key}.io_read_mode must be auto, direct, or stream")
+        direct_cache_s = ir.get("direct_fallback_cache_s", 0.2)
+        if (type(direct_cache_s) not in (int, float) or
+                not math.isfinite(direct_cache_s) or not 0.05 <= direct_cache_s <= 2.0):
+            raise ValueError(
+                f"{key}.direct_fallback_cache_s must be between 0.05 and 2.0 seconds"
+            )
+        if not isinstance(ir.get("auto_calibrate_io", False), bool):
+            raise ValueError(f"{key}.auto_calibrate_io must be true or false")
+        calibration_samples = ir.get("calibration_samples", 10)
+        if type(calibration_samples) is not int or not 3 <= calibration_samples <= 100:
+            raise ValueError(f"{key}.calibration_samples must be an integer from 3 to 100")
+        calibration_consistency = ir.get("calibration_min_consistency", 0.8)
+        if (type(calibration_consistency) not in (int, float) or
+                not math.isfinite(calibration_consistency) or
+                not 0.5 < calibration_consistency <= 1.0):
+            raise ValueError(
+                f"{key}.calibration_min_consistency must be greater than 0.5 and at most 1.0"
+            )
 
     if config["mission"].get("enabled"):
         for name in ("position", "attitude"):
@@ -226,7 +290,8 @@ def load_config(path=DEFAULT_CONFIG):
     if sensor["offset_from_yaw_axis_m"] < 0:
         raise ValueError("exploration.sensor.offset_from_yaw_axis_m must be nonnegative")
     for name in ("yaw_speed_deg_s", "recenter_speed_deg_s",
-                 "angle_tolerance_deg", "pitch_tolerance_deg"):
+                 "angle_tolerance_deg", "pitch_tolerance_deg",
+                 "movement_angle_tolerance_deg"):
         value = gimbal.get(name)
         if not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
             raise ValueError(f"exploration.gimbal.{name} must be a positive number")
@@ -234,6 +299,13 @@ def load_config(path=DEFAULT_CONFIG):
         raise ValueError("exploration.gimbal.angle_tolerance_deg must be less than 45")
     if gimbal["pitch_tolerance_deg"] >= 45:
         raise ValueError("exploration.gimbal.pitch_tolerance_deg must be less than 45")
+    if gimbal["movement_angle_tolerance_deg"] >= 45:
+        raise ValueError("exploration.gimbal.movement_angle_tolerance_deg must be less than 45")
+    movement_misses = gimbal.get("movement_alignment_miss_samples")
+    if type(movement_misses) is not int or not 1 <= movement_misses <= 20:
+        raise ValueError(
+            "exploration.gimbal.movement_alignment_miss_samples must be an integer from 1 to 20"
+        )
     pitch = gimbal.get("pitch_deg")
     if not isinstance(pitch, (int, float)) or not math.isfinite(pitch):
         raise ValueError("exploration.gimbal.pitch_deg must be a finite number")
@@ -267,11 +339,31 @@ def load_config(path=DEFAULT_CONFIG):
     for name in ("max_step_deg", "camera_hfov_deg", "camera_vfov_deg"):
         if not 0 < target[name] <= (10 if name == "max_step_deg" else 180):
             raise ValueError(f"exploration.target_inspection.{name} is outside its range")
-    for name in ("confirm_frames", "lock_frames", "max_aim_steps", "max_targets_per_wall"):
+    for name in ("confirm_frames", "lock_frames", "lock_max_misses",
+                 "target_lost_frames", "reacquire_frames",
+                 "max_aim_steps", "max_targets_per_wall"):
         if type(target.get(name)) is not int or not 1 <= target[name] <= 30:
             raise ValueError(f"exploration.target_inspection.{name} must be an integer from 1 to 30")
     if target["max_aim_steps"] < target["lock_frames"]:
         raise ValueError("exploration.target_inspection.max_aim_steps must cover lock_frames")
+    shots = target.get("shots_per_target", 2)
+    if type(shots) is not int or not 1 <= shots <= 5:
+        raise ValueError("exploration.target_inspection.shots_per_target must be an integer from 1 to 5")
+    settle = target.get("fire_settle_s", 1.0)
+    if type(settle) not in (int, float) or not math.isfinite(settle) or settle < 0:
+        raise ValueError("exploration.target_inspection.fire_settle_s must be a non-negative number")
+    aim_settle = target.get("aim_settle_s", 0.15)
+    if type(aim_settle) not in (int, float) or not math.isfinite(aim_settle) or aim_settle < 0:
+        raise ValueError("exploration.target_inspection.aim_settle_s must be a non-negative number")
+    for name in ("scan_yaw_speed_deg_s", "aim_yaw_speed_deg_s"):
+        if name in target:
+            val = target[name]
+            if type(val) not in (int, float) or not math.isfinite(val) or val <= 0:
+                raise ValueError(f"exploration.target_inspection.{name} must be a positive number")
+    if "search_frames" in target:
+        sf = target["search_frames"]
+        if type(sf) is not int or sf < target["confirm_frames"]:
+            raise ValueError("exploration.target_inspection.search_frames must be an integer >= confirm_frames")
     if target.get("fire_mode") != "infrared":
         raise ValueError("exploration.target_inspection.fire_mode must be infrared")
     if exploration["enabled"]:

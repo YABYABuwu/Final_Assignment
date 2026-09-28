@@ -17,9 +17,14 @@ config/settings.yaml ──> src/config_loader.py ──> main.py
                                              │       ├─ occupancy grid + local scan matching
                                              │       └─ DFSExplorer → GimbalMoveAction(CAR) + ChassisController.move_to()
                                              └─ Dashboard.start() ← logger + robot.camera + SLAM map
+                                                     └─ latest-frame queue → Detection Thread → annotated MJPEG + live target state
                                                      └─ /api/status, /api/history, /video
 
 review.py → RunStore(data/raw) → /api/runs, /api/run, /api/csv → review/index.html
+
+test_ir_target_marker.py → confirmed live detection + operator confirmation
+                         ├─→ explicit INFRARED_FIRE
+                         └─→ data/targets.json → run_round2.py → MultiTargetPlanner
 ```
 
 `main.py` เป็นเจ้าของวงจรชีวิตของหุ่นยนต์: ตรวจ config ก่อนเชื่อมต่อ, เริ่ม logger, สร้าง chassis controller, เปิด dashboard ถ้าตั้งค่า, รัน waypoint และหยุด `chassis → dashboard → logger → robot` ใน `finally` กรณีหยุดตามเงื่อนไขที่คาดหมายจะบันทึกสถานะ `stopped` และสาเหตุใน `run_summary.json` โดยไม่แสดง traceback; ข้อบกพร่องที่ไม่คาดหมายยังบันทึก `failed` หน้า review รันแยกได้โดยไม่ต่อหุ่นยนต์
@@ -28,17 +33,18 @@ review.py → RunStore(data/raw) → /api/runs, /api/run, /api/csv → review/in
 
 | ส่วน | หน้าที่และจุดเชื่อม |
 | --- | --- |
-| `config/settings.yaml`, `src/config_loader.py` | ค่าการเชื่อมต่อ, motion/PID, logging, dashboard, review, mission และการตรวจค่าก่อนต่อหุ่นยนต์ |
+| `config/settings.yaml`, `src/config_loader.py` | ค่าการเชื่อมต่อ, motion/PID, logging, dashboard, image processing, review, mission และการตรวจค่าก่อนต่อหุ่นยนต์ |
 | `src/logger.py` | ตาราง `STREAMS` ผูกชื่อ stream กับ SDK module/subscribe/unsubscribe/ชื่อคอลัมน์; callback เก็บค่าล่าสุดและ history; writer thread เขียน CSV เฉพาะ stream ที่ `save: true` |
 | `src/chassis.py`, `src/PID.py` | `move_to` ใช้ position/attitude ที่ยังสด, แปลงความเร็วจากกรอบโลกเป็นกรอบรถ, จำกัดความเร็วรวมและอัตราเร่งเฉพาะแกนสไลด์ซ้าย/ขวาตาม `motion.max_lateral_accel_m_s2` (ลดความเร็ว/หยุดทันทีได้) แล้วหยุดรถเมื่อจบหรือผิดพลาด; `PIDController` คำนวณค่าควบคุม |
 | `src/rear_ir.py` | แปล `adapter` IO เป็น IR หน้า/หลังซ้ายขวาจาก ID/port และ polarity แยกตัว; กั้นคำสั่งเคลื่อนที่เข้าหาวัตถุแล้วหลบเป็นขั้นภายในระยะ/จำนวนครั้งจำกัด โดยตรวจ IR อีกปลายก่อนหลบและรอข้อมูลสดเมื่อขาดช่วง |
-| `src/dashboard.py`, `dashboard/index.html` | server ภาพสดและ telemetry; `/api/status` ส่งค่าล่าสุด, `/api/history` ส่งจุดใหม่พร้อมชื่อคอลัมน์, `/video` ส่ง MJPEG |
+| `img_processing/`, `src/dashboard.py`, `dashboard/index.html` | Camera Thread อ่าน SDK เท่านั้นและส่ง frame ล่าสุดผ่าน queue ขนาด 1; Detection Thread ตรวจทุกสี, เขียน contour และยืนยัน 3/5 frame; `/api/status` ส่งค่าล่าสุด, `/video` ส่ง annotated MJPEG ที่ผูกกับ frame ID เดียวกัน |
 | `src/slam.py` | `CellWallGrid` เก็บ occupancy ของขอบช่องที่ใช้ร่วมกัน; `OccupancyGridSLAM` ฉายลำแสง ToF เดี่ยว โดยใช้ pose, มุม yaw ของ gimbal และ offset จากแกน yaw; `SlamWorker` เลือก ToF channel ตาม config, อ่าน sample timestamp ใกล้กันและทำงานเบื้องหลัง |
 | `src/explorer.py` | `DFSExplorer` หัน gimbal ดูเพื่อนบ้านครบ 4 ทิศเมื่อเข้าช่องใหม่, รอ angle telemetry, action สำเร็จ และ median ของ ToF scan ใหม่ 3 ครั้งที่ตรงทิศ; ก่อนเดินไปช่องใหม่ตรวจ ToF เทียบเกณฑ์กำแพงด้วย scan สดหนึ่งครั้งแล้วใช้ผลนั้นเริ่มเดิน โดยไม่มีการสั่ง scan ทิศเดิมซ้ำ ทางกลับใช้ขอบเปิดที่บันทึกไว้และหัน ToF ตามทิศเดินหนึ่งทิศเพื่อเฝ้าระยะ โดยไม่สแกนสี่ทิศซ้ำ; ก่อนเคลื่อนที่แต่ละช่วงจับ yaw สดแล้วส่งเป็นเป้าหมายคงที่ให้ `ChassisController.move_to()` และหยุดเมื่อ telemetry/status/ทางกลับไม่ผ่านเกณฑ์ |
 | `src/targets.py`, `src/target_inspection.py` | ตรวจ HSV สีและรูปร่างจากภาพ BGR ของ dashboard, ติดตาม contour ข้ามภาพ, เล็งทุกเป้าที่พบในผนังเดียวจนถึง `max_targets_per_wall`, รอ SDK ปลด gimbal action และสั่ง infrared 2 นัดต่อเป้าหลังปรับมุมให้ใกล้กลางภาพที่สุดที่กิมบอลทำได้และยืนยันว่าเป้ายังอยู่ในภาพต่อเนื่อง; dashboard ใส่กรอบกับชื่อสี/รูปร่างบน JPEG ที่ส่งให้หน้าเว็บ โดยตัวเล็งรับภาพต้นฉบับ |
 
 ขั้นตรวจเป้าใช้ `Gimbal.moveto()` ของ SDK ซึ่งอ้าง pitch เทียบพื้น และตรวจกับ `gimbal.pitch_ground_deg` จาก logger; เมื่อคืนมุมสแกนใช้ `ChassisRelativeGimbal.recenter()` และตรวจ `gimbal.pitch_deg` เทียบตัวรถ ขั้นสแกนถัดไปจะกำหนด yaw ของตัวเอง log รัน `20260928_210509_814778` พบว่าหัวอยู่ที่ `pitch_ground ≈ -15°` ตลอด แต่ `pitch_deg` เทียบรถค่อย ๆ เลื่อนจากประมาณ `-15°` เป็น `-23.6°` เมื่อรถเอียง Dashboard แสดงว่าอยู่ระหว่างรอ SDK action, มุมหัว หรือภาพใหม่อย่างแยกกัน และบันทึกขั้นที่รอเมื่อหยุดรัน
 | `src/run_review.py`, `review/index.html`, `review.py` | อ่าน run จาก CSV/summary, ส่งข้อมูลตัวอย่างให้กราฟ, ดาวน์โหลด CSV เต็ม, แสดงปัญหาบางประเภทและการเล่นย้อนหลัง |
+| `test_ir_target_marker.py`, `src/target_marker.py`, `run_round2.py` | ทดสอบยิง Infrared เฉพาะเมื่อผู้ใช้เปิด `--fire` และกด Enter หลังป้ายยืนยัน/อยู่กลางภาพ; บันทึก `data/targets.json` แบบ atomic และให้ Round 2 โหลดก่อน target ใน map; ทั้งสองเส้นทางระบุ `INFRARED_FIRE` โดยตรง |
 | `tests/` | ทดสอบ config, PID, logger, controller, dashboard และ review ด้วย fake robot/ข้อมูลชั่วคราว |
 
 ## สัญญาข้อมูลที่ใช้ร่วมกัน
@@ -46,7 +52,7 @@ review.py → RunStore(data/raw) → /api/runs, /api/run, /api/csv → review/in
 - `STREAMS[name]` ระบุชื่อ stream, อุปกรณ์ SDK, เมธอด subscribe/unsubscribe และลำดับคอลัมน์ ลำดับนี้ต้องตรงกับ tuple ที่ callback ส่งมาและแถว CSV
 - `logging.streams.<name>` มี `enabled`, `save`, `frequency_hz`; `enabled` เปิด subscription และ history ส่วน `save` เพิ่ม CSV (ต้องเปิด `enabled` ด้วย) position/attitude ต้องเปิดเมื่อ mission ทำงาน
 - `SensorLogger.get_latest(name, max_age_s)` คืน tuple หรือ `None` หากยังไม่มี/เก่าเกินกำหนด `get_history_since(after_id)` คืน `{"cursor": id, "streams": {name: [(id, elapsed_s, values), ...]}}` โดย history มีเพดานต่อ stream
-- `Dashboard.snapshot()` ส่ง `streams` ของ stream ที่เปิด, `dropped_csv_rows`, `camera_ready`, `camera_error`, `mission_status`, `motion_settings` ที่ใช้จริง; ตัวเลข/อาร์เรย์จาก tuple ถูก JSON แปลงเป็น array และค่าเก่าเกิน 2 วินาทีเป็น `null`
+- `Dashboard.snapshot()` ส่ง `streams` ของ stream ที่เปิด, `dropped_csv_rows`, `camera_ready`, `camera_error`, `mission_status`, `motion_settings` ที่ใช้จริง และ `target_detection` ซึ่งมี mode, undistort, error, frame ID, อายุผล, frame ที่ทิ้ง และรายการ `{color, shape, area_px2, center_px, stability_hits, stability_required, confirmed}` ของ frame ล่าสุด; ตัวเลข/อาร์เรย์จาก tuple ถูก JSON แปลงเป็น array และค่าเก่าเกิน 2 วินาทีเป็น `null`
 - `Dashboard.history()` เพิ่ม `columns` ให้ข้อมูล history หน้าเว็บใช้ชื่อคอลัมน์สร้างกราฟทั่วไปอัตโนมัติ; API ใช้ `since` เป็น sample id รวมทุก stream
 - เมื่อบันทึกข้อมูล: `data/raw/<timestamp>/<stream>.csv` มี `timestamp,elapsed_s,<columns...>`; `run_summary.json` เขียนเมื่อหยุดปกติ และเก็บสถานะ, error, จำนวนแถว, แถวตกหล่น, ค่า stream, `motion_settings` และข้อผิดพลาด logger
 - `RunStore.load_run()` ส่ง `streams.<name> = {columns, samples, total_rows, displayed_rows, gap_count, largest_gap_s, first_s, last_s}` โดย `samples` เป็น `[row_number, elapsed_s, values]`; หน้า review สร้างกราฟทั่วไปจาก CSV ที่มีอยู่
@@ -66,7 +72,7 @@ review.py → RunStore(data/raw) → /api/runs, /api/run, /api/csv → review/in
 | ToF ช่องที่ตั้งใน `exploration.sensor.tof_channel` | ตัวเลขบนภาพกล้องและตำแหน่งหัวเซนเซอร์บนแผนที่ | CSV มีครบสี่ช่องจาก SDK; review แสดงช่อง 0 เป็นค่าเริ่มต้น |
 | status | กราฟทั่วไป | เหตุ picked up/slip/impact/roll over |
 | camera | MJPEG สดใน RAM | ไม่มีภาพย้อนหลัง |
-| เป้าที่ผนัง | ขั้นตอนตรวจผนัง สี/รูปร่าง และจำนวนคำสั่งยิงที่ SDK รับ | ผลตรวจแต่ละหน้าผนังใน run summary; ไม่เก็บภาพย้อนหลัง |
+| เป้าที่ผนัง / target detection | ขั้นตอนตรวจผนัง สี/รูปร่าง, contour/label บน MJPEG และจำนวนคำสั่งยิงที่ SDK รับ | ผลตรวจแต่ละหน้าผนังใน run summary และ data/targets.json |
 | mission | ข้อความ `mission_status` ใน RAM | สถานะ/error ระดับ run ใน summary |
 | exploration | กริดกำแพงสี่ด้าน, occupancy ละเอียด, trajectory, DFS status | กริดสุดท้ายใน summary และตารางกำแพงใน review; JSON export มีทั้งสองกริด |
 
@@ -78,7 +84,7 @@ review.py → RunStore(data/raw) → /api/runs, /api/run, /api/csv → review/in
 - ระหว่าง DFS ค่าเริ่มต้น `exploration.heading_source: attitude` ใช้ yaw ของ chassis สำหรับ PID และเล็งทิศสแกน เพราะ log วันที่ 2026-09-27 แสดงว่า yaw ที่อนุมานจาก `gimbal.yaw_ground_deg - gimbal.yaw_deg` ต่างจาก attitude เพิ่มต่อเนื่องประมาณ 0° เป็น 11° ในรัน `20260927_221114_019742`; รัน `20260927_212750_477870` ต่างถึงประมาณ 18° ยังเปิด `heading_source: gimbal` ได้เพื่อทดลองหลังสอบเทียบ โดยปรับศูนย์กับ `sub_attitude` ครั้งแรกและต้องมีข้อมูล gimbal สด ตัวควบคุม yaw ชดเชยต่อเนื่องระหว่างเคลื่อน แม้ความคลาดน้อยกว่าค่า arrival tolerance การเปลี่ยนแหล่ง yaw ไม่ยืนยันว่าหัว ToF ตรงแนวหน้า chassis ทางกล ต้องตรวจบนหุ่นจริง
 - `sample_timeout_s` ใช้กับ pose ของ controller; snapshot ของ dashboard ใช้เกณฑ์ 2 วินาที หากเพิ่มข้อมูลที่มีผลต่อคำสั่งขับ ต้องกำหนดเกณฑ์ความสดและพฤติกรรมเมื่อข้อมูลหายเอง
 - History ใน RAM มีขอบเขตและอาจสูญจุดเก่าหากผู้ดูดึงช้า CSV ใช้ queue จำกัด; เมื่อเต็มจะข้ามแถวแต่ค่าล่าสุดยังอัปเดต Review อ่านเฉพาะ stream ที่บันทึกไว้
-- Dashboard สดเปิดกล้องเมื่อ `dashboard.enabled: true`; หน้า review ไม่มีภาพย้อนหลัง ค่า `host` เริ่มต้นเป็น localhost และเว็บยังไม่มีระบบล็อกอิน
+- Dashboard สดเปิดกล้องเมื่อ `dashboard.enabled: true`; `image_processing.enabled` ใช้ stream เดียวกันและจะถูก config loader ปฏิเสธเมื่อ dashboard ปิด. ผลตรวจเป็น live state ไม่ได้เป็นแหล่งคำสั่งขับหรือยิง; หน้า review ไม่มีภาพย้อนหลัง ค่า `host` เริ่มต้นเป็น localhost และเว็บยังไม่มีระบบล็อกอิน
 - การทดสอบใน `tests/` ไม่ครอบคลุมหุ่นยนต์จริง การปรับ PID สภาพพื้น และการส่งภาพผ่าน Wi-Fi จริง
 - หุ่นยนต์นี้ใช้ ToF เดียวบน gimbal; แต่ละ scan วัดหนึ่งแนวและสะสมเป็น occupancy grid ตาม odometry การ scan matching เดิมต้องมีอย่างน้อยสอง endpoint ใน scan เดียว จึงไม่แก้ drift ในโหมด ToF เดี่ยว และไม่ใช่การ relocalize ทั่วแผนที่
 - `exploration.sensor.tof_channel` เป็นดัชนีข้อมูล SDK แบบเริ่มนับจาก 0 (ค่าเริ่มต้น 0); CSV ใหม่ใช้ `tof_0_mm`–`tof_3_mm` ส่วน CSV เก่าที่ใช้ `tof_1_mm`–`tof_4_mm` ยังเปิดใน review ได้ โดยค่าตัวแรกหมายถึงช่อง 0 เหมือนกัน `offset_from_yaw_axis_m` ตั้งเป็น 0.075 m ตามระยะจากแกน yaw ที่ผู้ใช้ให้ และ `offset_yaw_deg: 0` สมมติว่า offset อยู่แนวเดียวกับเลนส์ ส่วน `pivot_x_m/pivot_y_m` ยังตั้งต้นเป็นศูนย์และต้องปรับตามตำแหน่งแกนจริงจากจุดกลางรถก่อนใช้บนฮาร์ดแวร์

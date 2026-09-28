@@ -121,8 +121,28 @@ class ChassisController:
                     self.stop()
                     time.sleep(period)
                     continue
+                forward_clear = True
+                clear_threshold_mm = settings.get("forward_tof_clear_mm", 250.0)
+                if bumper.end == "rear":
+                    if self.front_ir is not None and self.front_ir.blocks_motion(forward, 0, 0):
+                        forward_clear = False
+                    elif self.logger is not None:
+                        tof_sample = self.logger.get_sample("tof", max_age_s=0.5)
+                        if tof_sample is not None and len(tof_sample[0]) > 0:
+                            try:
+                                tof_val = float(tof_sample[0][0])
+                                if 0 < tof_val < clear_threshold_mm:
+                                    forward_clear = False
+                            except (TypeError, ValueError, IndexError):
+                                pass
+                else:
+                    if self.rear_ir is not None and self.rear_ir.blocks_motion(-forward, 0, 0):
+                        forward_clear = False
+
+                mode = settings.get("recovery_mode", "diagonal")
                 direction, escape_x, escape_y = recovery_vector(
-                    sensors, forward, attempt=attempt, end=bumper.end)
+                    sensors, forward, attempt=attempt, end=bumper.end,
+                    mode=mode, forward_clear=forward_clear)
                 if direction == "clear":
                     # Hold still while confirming consecutive clear samples.
                     self.stop()

@@ -75,6 +75,9 @@ def main():
             logger.front_ir_settings = config["front_ir"]
             logger.front_ir_recoveries = chassis.front_ir.events
         if exploration_settings["enabled"]:
+            targets_file = project_dir / "data" / "targets.json"
+            from src.target_marker import init_target_document
+            init_target_document(targets_file, backup=True)
             slam_worker = SlamWorker(logger, slam_map, exploration_settings)
             explorer = DFSExplorer(chassis, ChassisRelativeGimbal(ep_robot.gimbal), logger, slam_map,
                                     exploration_settings)

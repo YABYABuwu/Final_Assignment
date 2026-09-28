@@ -1,4 +1,4 @@
-"""Round 2 Execution Script for RoboMaster EP Assignment 2.
+"""Round 2 infrared execution script for RoboMaster EP Assignment 2.
 
 Navigates to shoot all targets in the shortest path/time (< 5 mins)
 using the map generated in Round 1. Moves by sliding (hold heading)
@@ -16,7 +16,7 @@ from pathlib import Path
 import time
 
 from src.config_loader import load_config
-from src.planner import GridMap, MultiTargetPlanner, plot_mission_map
+from src.planner import GridMap, MultiTargetPlanner, plot_mission_map, find_path_bfs, find_path_astar
 from src.mission_stop import MissionStop
 
 
@@ -38,10 +38,17 @@ def main():
                         help="List of target cell coordinates, e.g. '[(3,2), (2,1)]'. If omitted, automatically loaded from Round 1.")
     parser.add_argument("--targets-file", default="data/targets.json", help="Path to dedicated targets JSON file if separate from map")
     parser.add_argument("--max-distance", type=int, default=2, help="Max shooting distance in tiles (<= 2)")
-    parser.add_argument("--allow-same-cell", action="store_true", help="Allow shooting from the same tile as the target (distance 0)")
+    parser.add_argument("--allow-same-cell", action="store_true", default=True,
+                        help="Allow shooting from the same tile as the target (distance 0, default True)")
+    parser.add_argument("--no-allow-same-cell", action="store_false", dest="allow_same_cell",
+                        help="Disallow shooting from the same tile as the target")
     parser.add_argument("--standoff", type=float, default=0.20, help="Standoff distance in meters from cell center when shooting in same cell (accounts for 20cm gimbal length)")
+    parser.add_argument("--speed", type=float, default=0.25,
+                        help="Movement speed in m/s (default 0.25 m/s, slightly faster than exploration 0.20 m/s)")
     parser.add_argument("--return-to-start", action="store_true", help="Return to starting cell after shooting")
     parser.add_argument("--algorithm", default="bfs", choices=["bfs", "astar"], help="Search algorithm")
+    parser.add_argument("--no-skip-unreachable", action="store_false", dest="skip_unreachable", default=True,
+                        help="Do not skip unreachable targets; fail planning instead")
     parser.add_argument("--output", default="data/maps/round2_plan.png", help="Output PNG path for map and route")
     parser.add_argument("--dry-run", action="store_true", help="Plan and visualize without connecting to physical robot")
     args = parser.parse_args()
@@ -58,49 +65,99 @@ def main():
     grid_map = GridMap.from_file(map_file)
     print(f"Loaded {len(grid_map.cells)} cells from map.")
     print(f"Start Cell: {start_cell}")
+    start_cell = tuple(start_cell) if not isinstance(start_cell, tuple) else start_cell
+    if start_cell not in grid_map.cells:
+        print(f"Error: start cell {start_cell} is not in the loaded map. Available cells: {sorted(grid_map.cells.keys())[:10]}...")
+        return
 
-    # Resolve targets (CLI argument > map detected_targets > targets.json)
+    # Resolve targets (CLI argument > marker file > targets embedded in the map)
     target_list = args.targets
     if not target_list:
-        if grid_map.detected_targets:
+        targets_file = project_dir / args.targets_file
+        if targets_file.exists():
+            try:
+                with open(targets_file, "r", encoding="utf-8") as f:
+                    file_data = json.load(f)
+                    if isinstance(file_data, list):
+                        target_list = file_data
+                    elif isinstance(file_data, dict):
+                        target_list = file_data.get("targets", [])
+                    if target_list:
+                        print(f"Auto-loaded targets from {args.targets_file}.")
+            except Exception as e:
+                print(f"Warning: Failed to load targets file {targets_file}: {e}")
+        if not target_list and grid_map.detected_targets:
             print("Auto-loaded targets from map file.")
             target_list = grid_map.detected_targets
-        else:
-            targets_file = project_dir / args.targets_file
-            if targets_file.exists():
-                try:
-                    with open(targets_file, "r", encoding="utf-8") as f:
-                        file_data = json.load(f)
-                        if isinstance(file_data, list):
-                            target_list = file_data
-                        elif isinstance(file_data, dict):
-                            target_list = file_data.get("targets", [])
-                        print(f"Auto-loaded targets from {args.targets_file}.")
-                except Exception as e:
-                    print(f"Warning: Failed to load targets file {targets_file}: {e}")
 
     if not target_list:
         print("Error: No targets specified via --targets and no detected targets found in map or data/targets.json.")
         print("Usage example: python run_round2.py --targets \"[(3,2), (2,1)]\"")
         return
 
-    # Filter out hostages / non-targets if target objects have metadata
+    # Filter out hostages / non-targets and unreachable targets
     valid_targets = []
+    path_func = find_path_astar if args.algorithm == "astar" else find_path_bfs
     for item in target_list:
         if isinstance(item, dict):
             # Check if flagged as hostage or should_shoot is False
             if item.get("type") == "hostage" or item.get("should_shoot") is False:
                 print(f"  [Skip] Non-target or Hostage ignored: {item.get('id', item)}")
                 continue
+
+            target_pos = tuple(item.get("pos", item.get("index", ())))
+            if args.skip_unreachable:
+                side = item.get("side")
+                side_map = {
+                    "x+": 0.0, "front": 0.0, "forward": 0.0,
+                    "x-": 180.0, "back": 180.0, "backward": 180.0,
+                    "y+": 90.0, "left": 90.0,
+                    "y-": -90.0, "right": -90.0,
+                }
+                yaw = side_map.get(side, 0.0) if side else 0.0
+                standpoints = grid_map.find_shooting_standpoints(
+                    target_pos, max_distance=args.max_distance,
+                    allow_same_cell=args.allow_same_cell,
+                    default_same_cell_yaw=yaw
+                )
+                reachable_sp = [sp for sp in standpoints if path_func(grid_map, start_cell, sp["standpoint"]) is not None]
+                if not reachable_sp:
+                    print(f"  [Skip] Unreachable target: {item.get('id', item)} at {target_pos} (no line-of-sight standpoint reachable on map)")
+                    continue
             valid_targets.append(item)
         else:
+            target_pos = tuple(item)
+            if args.skip_unreachable:
+                standpoints = grid_map.find_shooting_standpoints(
+                    target_pos, max_distance=args.max_distance,
+                    allow_same_cell=args.allow_same_cell
+                )
+                reachable_sp = [sp for sp in standpoints if path_func(grid_map, start_cell, sp["standpoint"]) is not None]
+                if not reachable_sp:
+                    print(f"  [Skip] Unreachable target at {target_pos} (no line-of-sight standpoint reachable on map)")
+                    continue
             valid_targets.append(item)
 
     if not valid_targets:
-        print("Error: All found targets are flagged as hostages/non-targets. Nothing to shoot.")
+        print("Error: All found targets are flagged as hostages/non-targets or are unreachable on the current map.")
         return
 
-    print(f"Active Targets to Shoot: {valid_targets}")
+    # Deduplicate targets discovered multiple times at the same cell (keeping latest observation)
+    unique_targets = []
+    seen_target_keys = set()
+    for item in reversed(valid_targets):
+        if isinstance(item, dict):
+            key = (tuple(item.get("pos", ())), item.get("color"), item.get("shape"), item.get("side"))
+            if key in seen_target_keys:
+                continue
+            seen_target_keys.add(key)
+            unique_targets.append(item)
+        else:
+            unique_targets.append(item)
+    unique_targets.reverse()
+    valid_targets = unique_targets
+
+    print(f"Active Targets to Shoot ({len(valid_targets)}): {[t.get('id', t) if isinstance(t, dict) else t for t in valid_targets]}")
 
     planner = MultiTargetPlanner(grid_map, max_shooting_dist=args.max_distance,
                                  allow_same_cell=args.allow_same_cell,
@@ -135,12 +192,15 @@ def main():
     config = load_config(project_dir / "config" / "settings.yaml")
     log_settings = config["logging"].copy()
     log_settings["directory"] = project_dir / log_settings["directory"]
+    if "exploration" in config and "position_coordinate_system" in config["exploration"]:
+        log_settings["position_cs"] = config["exploration"]["position_coordinate_system"]
 
-    from robomaster import conn, robot
+    from robomaster import blaster, conn, robot
     from src.chassis import ChassisController
     from src.gimbal_control import ChassisRelativeGimbal
     from src.logger import SensorLogger
     from src.rear_ir import RearIRBumper, FrontIRBumper
+    from src.target_marker import fire_infrared
 
     def sdk_conn_type(name):
         return {
@@ -152,6 +212,7 @@ def main():
     ep_robot = robot.Robot()
     logger = None
     chassis = None
+    dashboard = None
     connected = False
 
     try:
@@ -161,6 +222,7 @@ def main():
         logger.start()
 
         motion_settings = config["motion"].copy()
+        motion_settings["max_speed_m_s"] = args.speed
         chassis = ChassisController(ep_robot, logger, motion_settings)
         if config["rear_ir"]["enabled"]:
             chassis.rear_ir = RearIRBumper(logger, config["rear_ir"])
@@ -168,50 +230,110 @@ def main():
             chassis.front_ir = FrontIRBumper(logger, config["front_ir"])
 
         gimbal = ChassisRelativeGimbal(ep_robot.gimbal)
-        gimbal.recenter()
+        _recenter_action = gimbal.recenter()
+        if _recenter_action is not None:
+            _recenter_action.wait_for_completed(timeout=5.0)
 
         print("Waiting for telemetry sensors...")
         logger.wait_for("position", 5.0)
         logger.wait_for("attitude", 5.0)
+        logger.wait_for("gimbal", 5.0)
+        logger.wait_for("tof", 5.0)
+        logger.wait_for("status", 5.0)
 
-        # Index shooting actions by the waypoint step index
-        actions_by_step = {act["path_step_index"]: act for act in plan["shooting_plan"]}
+        # Open camera and dashboard for visual target lock
+        from src.dashboard import Dashboard
+        from src.target_inspection import WallTargetInspector
+        import math as _math
+
+        dashboard = Dashboard(
+            ep_robot, logger, config["dashboard"],
+            target_settings=config["exploration"]["target_inspection"],
+        )
+        dashboard.start()
+        host = config["dashboard"]["host"]
+        port = config["dashboard"]["port"]
+        print(f"Dashboard: http://{host}:{port}")
+
+        # Index shooting actions by the waypoint step index (supporting multiple targets per standpoint)
+        actions_by_step = {}
+        for act in plan["shooting_plan"]:
+            actions_by_step.setdefault(act["path_step_index"], []).append(act)
+
+        # Minimal slam_worker stub: round2 does not do SLAM; inspector only needs pause/resume and error check
+        class _NoOpSlamWorker:
+            abort_event = __import__("threading").Event()
+            def status(self): return {"error": None, "waiting_telemetry": False, "tof_waiting": False}
+            def pause_mapping(self): pass
+            def resume_mapping(self): pass
+
+        slam_stub = _NoOpSlamWorker()
+        fire_type_val = blaster.INFRARED_FIRE
+        inspector = WallTargetInspector(
+            ep_robot.gimbal,
+            ep_robot.blaster,
+            dashboard,
+            logger,
+            chassis,
+            slam_stub,
+            config["exploration"],
+            fire_type_val,
+            on_progress=lambda *args: print(f"  [inspection] {args}"),
+            scan_gimbal=gimbal,
+        )
 
         start_time = time.time()
         print("\n=== Executing Round 2 Mission ===")
 
+        start_map_x, start_map_y = grid_map.cell_to_world(start_cell)
+        init_pose = chassis.get_pose()
+        robot_origin_x = float(init_pose[0]) if init_pose else 0.0
+        robot_origin_y = float(init_pose[1]) if init_pose else 0.0
+
+        body_yaw = 0.0  # heading held throughout (yaw=None in move_to latches to initial heading)
         for step_idx, cell in enumerate(plan["full_path"]):
             world_x, world_y = plan["waypoints"][step_idx]
-            print(f"\nStep {step_idx + 1}/{len(plan['full_path'])}: Moving to {cell} (x={world_x:.2f} m, y={world_y:.2f} m)")
-            
-            # Slide to cell holding heading
-            chassis.move_to(world_x, world_y, yaw=None)
+            # Map waypoints relative to the starting cell position on the floor
+            target_x = robot_origin_x + (world_x - start_map_x)
+            target_y = robot_origin_y + (world_y - start_map_y)
+            print(f"\nStep {step_idx + 1}/{len(plan['full_path'])}: Moving to {cell} (x={target_x:.2f} m, y={target_y:.2f} m)")
 
-            # Check if this cell is a shooting standpoint
+            curr_pose = chassis.get_pose()
+            dist_to_target = _math.hypot(curr_pose[0] - target_x, curr_pose[1] - target_y) if curr_pose else 999.0
+            if step_idx == 0 and dist_to_target < 0.10:
+                print(f"  -> Already at start standpoint {cell}; skipping initial motion.")
+                pose = curr_pose
+            else:
+                pose = chassis.move_to(target_x, target_y, yaw=None)
+            if pose is not None and len(pose) >= 3:
+                body_yaw = float(pose[2])
+
             if step_idx in actions_by_step:
-                action = actions_by_step[step_idx]
-                target_id = action["target_id"]
-                target_pos = action["target_pos"]
-                yaw_deg = action["gimbal_yaw_deg"]
-                print(f"  -> Shooting Standpoint reached for {target_id} at {target_pos}!")
-                print(f"  -> Aiming gimbal to {yaw_deg:.1f} deg...")
-                gimbal_action = gimbal.moveto(pitch=0, yaw=yaw_deg, yaw_speed=90)
-                if gimbal_action is not None:
-                    gimbal_action.wait_for_completed(timeout=3.0)
-                time.sleep(0.5)
+                for action in actions_by_step[step_idx]:
+                    target_id = action["target_id"]
+                    target_pos = action["target_pos"]
+                    target_color = action.get("target_color", "")
+                    target_shape = action.get("target_shape", "")
+                    target_pitch = config["exploration"]["target_inspection"].get("pitch_deg", -20.0)
+                    grid_yaw = action["gimbal_yaw_deg"]  # degrees, grid frame
+                    base_yaw = grid_map.base_pose[2]     # map rotation in world frame
+                    world_yaw = _math.fmod(grid_yaw + base_yaw + 540.0, 360.0) - 180.0
+                    sp = action["standpoint"]
+                    direction_delta = (target_pos[0] - sp[0], target_pos[1] - sp[1])
+                    if direction_delta == (0, 0):
+                        side = action.get("side", "y+")
+                        side_deltas = {"x+": (1, 0), "x-": (-1, 0), "y+": (0, -1), "y-": (0, 1)}
+                        direction_delta = side_deltas.get(side, (0, -1))
 
-                # Fire blaster (if available)
-                print(f"  -> FIRING at Target {target_id}!")
-                try:
-                    if hasattr(ep_robot, "blaster"):
-                        ep_robot.blaster.fire(times=1)
-                except Exception as e:
-                    print(f"  (Blaster notice: {e})")
-                time.sleep(0.5)
-
-                # Return gimbal to center
-                gimbal.moveto(pitch=0, yaw=0, yaw_speed=90)
-                time.sleep(0.3)
+                    print(f"  -> Standpoint for {target_id} ({target_color} {target_shape}) at {target_pos}, world_yaw={world_yaw:.1f} deg, pitch={target_pitch:.1f} deg")
+                    result = inspector.inspect(
+                        cell=sp,
+                        delta=direction_delta,
+                        world_yaw=world_yaw,
+                        body_yaw=body_yaw,
+                        initial_pitch=target_pitch,
+                    )
+                    print(f"  -> Inspection result for {target_id}: {result.get('status')} targets={result.get('targets')}")
 
         elapsed = time.time() - start_time
         print(f"\n=== Round 2 Complete! Elapsed Time: {elapsed:.1f} s ({elapsed/60:.2f} min) ===")
@@ -225,12 +347,20 @@ def main():
     except MissionStop as err:
         print(f"\nMission stopped: {err}")
     finally:
-        if chassis is not None:
-            chassis.stop()
-        if logger is not None:
-            logger.stop()
-        if connected:
-            ep_robot.close()
+        try:
+            if 'dashboard' in dir() and dashboard is not None:
+                dashboard.stop()
+        finally:
+            try:
+                if chassis is not None:
+                    chassis.stop()
+            finally:
+                try:
+                    if logger is not None:
+                        logger.stop()
+                finally:
+                    if connected:
+                        ep_robot.close()
         print("Disconnected.")
 
 

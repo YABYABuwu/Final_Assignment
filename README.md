@@ -101,6 +101,25 @@ logger.stop()
 
 ตั้ง `dashboard.enabled: true` ใน `config/settings.yaml` แล้วรัน `python main.py` เปิดหน้า `http://127.0.0.1:8000` บนคอมที่รันโปรแกรม จะเห็นภาพกล้อง, x/y/yaw, ข้อมูลล่าสุดของ stream ที่เปิด และจำนวนแถว CSV ที่ข้าม หน้าเว็บดึงข้อมูลเซนเซอร์ทุก 1 วินาที เมื่อมี dashboard โปรแกรมจะเปิดค้างหลัง mission จบจนกด `Ctrl+C`; ปิดแล้วจะหยุดกล้องและเขียน CSV ที่ค้างก่อนตัดการเชื่อมต่อ
 
+ตั้ง `image_processing.enabled: true` เพื่อให้ `main.py` สร้าง `ColorShapeDetector`. Camera Thread เป็นผู้เดียวที่อ่าน SDK และส่งภาพล่าสุดผ่าน `Queue(maxsize=1)` ให้ Detection Thread ตัวเดียวตรวจทุกสี; ถ้าตรวจไม่ทันจะทิ้งภาพค้างและใช้ภาพใหม่สุด. `detection_fps` ค่าเริ่มต้น 8 FPS แยกจากกล้อง 20 FPS; เมื่อเปิด detector ภาพ annotated MJPEG จะอัปเดตตาม `detection_fps` ขณะที่กล้องยังรับภาพล่าสุดตาม `dashboard.max_fps`. ป้ายจะเป็น `confirmed` เมื่อพบสี+รูปทรงใกล้ตำแหน่งเดิมครบ `stability_min_hits` (3) จาก `stability_window` (5) frame. ค่าเริ่มต้น `mode: robust` ใช้ HSV multi-range, morphology, ellipse fitting, convex hull และ adaptive epsilon. ภาพ MJPEG และผลตรวจใช้ `frame_id` เดียวกัน; `/api/status.target_detection` ส่งอายุผล, จำนวน frame ที่ทิ้ง และสถานะยืนยัน. ผลนี้เป็น live state เท่านั้น ยังไม่ใช้สั่งยิงอัตโนมัติ. `enable_undistort` ใช้ calibration ตั้งต้นที่ปรับ camera matrix ตาม resolution; ควรรัน `python -m img_processing.calibrate_camera` เมื่อต้องการความแม่นยำของกล้องคันจริง.
+
+### ทดสอบ Infrared และ mark ป้ายสำหรับ Round 2
+
+ใช้ `test_ir_target_marker.py` หลังมีแผนที่ Round 1 แล้ว โดยระบุ cell ของป้ายเองเพราะกล้องเดี่ยวไม่สามารถระบุ cell บนแผนที่ได้แม่นยำ. สคริปต์จะปลด gimbal ให้หมุนด้วยมือ, เปิด Dashboard, รอป้าย `confirmed` ที่อยู่ใกล้ crosshair แล้วจึงยอมให้กด Enter. ค่าเริ่มต้นเป็น mark-only; ต้องใส่ `--fire` จึงส่งคำสั่งยิง และโค้ดระบุ `INFRARED_FIRE` ชัดเจนโดยไม่ใช้ค่าเริ่มต้น water-fire ของ SDK.
+
+```bash
+# ตรวจรูปแบบข้อมูล ไม่ต่อหุ่น/ไม่ยิง/ไม่เขียนไฟล์
+py -3.8 test_ir_target_marker.py --target-cell 3,2 --dry-run
+
+# ตรวจป้ายและ mark เท่านั้น
+py -3.8 test_ir_target_marker.py --target-cell 3,2 --color red --shape circle
+
+# ยิง Infrared 1 ครั้งหลังกด Enter และ mark ลง data/targets.json
+py -3.8 test_ir_target_marker.py --target-cell 3,2 --color red --shape circle --fire
+```
+
+`run_round2.py` อ่าน `data/targets.json` อัตโนมัติเมื่อไม่ใส่ `--targets` โดยให้ไฟล์ marker มีลำดับก่อน target ที่ฝังใน map; ตอนยิงจะบังคับใช้ Infrared เช่นกัน.
+
 ## เดินสำรวจด้วย SLAM และ DFS
 
 ระบบสำรวจใช้ `position`/`attitude` จาก RoboMaster SDK เป็น pose ตั้งต้น และใช้ ToF ช่องเดียวที่ติดบน gimbal: worker ผูกระยะกับมุม gimbal ที่ timestamp ใกล้กันแล้วฉายลำแสงหนึ่งเส้นลง occupancy grid ทุก scan ส่วน DFS หัน gimbal ดูครบ 4 ทิศ (`+X`, `−Y`, `−X`, `+Y`) เมื่อเข้าช่องใหม่ และสแกนทิศที่จะเดินไปช่องใหม่อีกหนึ่งครั้งเพื่อยืนยันระยะล่าสุดก่อนออกคำสั่งเดิน โดยไม่สแกนทิศเดิมซ้ำระหว่างเลือกทางกับเริ่มเดิน เมื่อกลับเข้าช่องที่เคยไปแล้วจะใช้ขอบในแผนที่โดยไม่สแกนสี่ทิศซ้ำ แต่หัน ToF ไปทางเดินกลับหนึ่งทิศเพื่อเฝ้าระยะ แล้วใช้ `ChassisController` เดิมขับ หน้า dashboard แสดงความคืบหน้าการสแกน, แผนที่, ทิศหัว ToF, ช่อง ToF และ offset ของเซนเซอร์ ถ้า pose/ToF/gimbal/status เก่าหรือสัญญาณ status ระบุการยก ลื่น ชน หรือพลิก ระบบหยุดคำสั่งเคลื่อนที่
