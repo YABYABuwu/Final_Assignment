@@ -30,6 +30,9 @@ class DFSExplorer:
         self.current_cell = (0, 0)
         self.cell_targets = {}
         self.alignments = {}
+        self.heading_alignments = {}
+        self.last_heading_alignment = None
+        self.heading_measurement = None
         self.travel_heading_deg = None
         self.last_motion_heading = None
         self.last_motion_stop = None
@@ -73,6 +76,12 @@ class DFSExplorer:
                                  for node, point in sorted(self.cell_targets.items())},
                 "alignments": {f"{node[0]},{node[1]}": result
                                    for node, result in sorted(self.alignments.items())},
+                "heading_alignment_enabled": self.settings["heading_alignment"]["enabled"],
+                "heading_bias_deg": getattr(self.chassis, "heading_bias_deg", 0.0),
+                "last_heading_alignment": self.last_heading_alignment,
+                "heading_measurement": self.heading_measurement,
+                "heading_alignments": {f"{node[0]},{node[1]}": result
+                                       for node, result in sorted(self.heading_alignments.items())},
                 "target_inspection_enabled": self.settings["target_inspection"]["enabled"],
                 "wall_inspections": [value for _, value in sorted(self.wall_inspections.items())],
                 "target_progress": self.target_progress,
@@ -116,7 +125,8 @@ class DFSExplorer:
             time.sleep(0.05)
 
     def _current_yaw(self):
-        if self.settings["heading_source"] == "gimbal":
+        if (self.settings["heading_source"] == "gimbal" or
+                self.settings["heading_alignment"]["enabled"]):
             getter = getattr(self.chassis, "get_pose", None)
             if callable(getter):
                 def read_gimbal_yaw():
@@ -208,11 +218,11 @@ class DFSExplorer:
             raise MissionStop("gimbal cannot reach the requested direction within its yaw limits")
         return min(reachable, key=lambda angle: abs(angle - current_relative_yaw))
 
-    def _prepare_gimbal(self):
-        """Physically center the head once and wait for SDK completion."""
-        if not self.settings["gimbal"]["auto_recenter"]:
+    def _prepare_gimbal(self, force=False):
+        """Physically center the head and wait for SDK release and fresh angles."""
+        if not force and not self.settings["gimbal"]["auto_recenter"]:
             return
-        self._set_status("centering_gimbal")
+        self._set_status("recenter_for_heading" if force else "centering_gimbal")
         request_time = time.time()
         action = self.gimbal.recenter(
             pitch_speed=self.settings["gimbal"]["recenter_speed_deg_s"],
@@ -241,12 +251,13 @@ class DFSExplorer:
                 "gimbal recenter did not reach center: yaw {:.1f}, pitch {:.1f}".format(
                     yaw, pitch))
 
-    def _scan_for_direction(self, delta):
+    def _scan_for_direction(self, delta, yaw_offset_deg=0.0, median_window=None):
         """Point the single ToF toward a candidate cell and wait for its new scan."""
         worker_status = self.slam_worker.status() if self.slam_worker is not None else None
         if worker_status is not None and worker_status["error"]:
             raise MissionStop(worker_status["error"])
-        world_yaw = self.base_pose[2] + math.degrees(math.atan2(delta[1], delta[0]))
+        world_yaw = (self.base_pose[2] + math.degrees(math.atan2(delta[1], delta[0])) +
+                     yaw_offset_deg)
         body_yaw = self._current_yaw()
         sensor = self.settings["sensor"]
         target_yaw = _wrap_degrees(
@@ -273,7 +284,8 @@ class DFSExplorer:
         aligned = False
         measured_yaw = current_yaw
         action_confirmed = action is None
-        median_window = self.settings["tof_median_window"]
+        median_window = (self.settings["tof_median_window"] if median_window is None
+                         else median_window)
         samples = []
         last_sample_timestamp = request_time
         collection_after = request_time if action_confirmed else None
@@ -389,9 +401,118 @@ class DFSExplorer:
                 if len(samples) >= median_window:
                     with self.lock:
                         self.scan_alignment = None
+                        self.last_scan_relative_yaw_deg = measured_yaw
                     self._set_status(previous_status)
                     return float(statistics.median(value for _, value in samples)), world_yaw
             time.sleep(0.03)
+
+    @staticmethod
+    def _fit_wall_normal(points, facing_yaw_deg, minimum_span_m, maximum_residual_m):
+        """Fit a wall in chassis coordinates and return its inward ray normal."""
+        first, last = points[0], points[-1]
+        dx, dy = last[0] - first[0], last[1] - first[1]
+        span = math.hypot(dx, dy)
+        if span < minimum_span_m:
+            return None, span, None
+        residual = max(abs(dx * (point[1] - first[1]) -
+                           dy * (point[0] - first[0])) / span for point in points)
+        if residual > maximum_residual_m:
+            return None, span, residual
+        normal_x, normal_y = dy / span, -dx / span
+        facing = math.radians(facing_yaw_deg)
+        if normal_x * math.cos(facing) + normal_y * math.sin(facing) < 0:
+            normal_x, normal_y = -normal_x, -normal_y
+        return math.degrees(math.atan2(normal_y, normal_x)), span, residual
+
+    def _align_heading(self, node):
+        """Recenter, fit a nearby wall from fresh fan scans, then correct yaw bias."""
+        settings = self.settings["heading_alignment"]
+        candidates = []
+        for delta in self.DIRECTIONS:
+            check = self.wall_grid.checks.get((tuple(node), delta), {})
+            range_mm = check.get("range_mm")
+            if (self.wall_grid.state(node, delta) == "wall" and
+                    type(range_mm) in (int, float) and
+                    settings["min_range_m"] * 1000 <= range_mm <=
+                    self.settings["wall_threshold_mm"]):
+                candidates.append((range_mm, delta))
+
+        def record(result):
+            with self.lock:
+                self.heading_alignments[tuple(node)] = result
+                self.last_heading_alignment = result
+                self.heading_measurement = None
+            self.map.set_exploration_state(self.snapshot())
+            return result
+
+        if not candidates:
+            return record({"status": "no_suitable_wall", "cell": list(node),
+                           "reason": "no direct wall within the configured scan range"})
+        _, delta = max(candidates)
+        side = CellWallGrid.DELTA_TO_SIDE[delta]
+        start_pose = self._motion_pose()
+        self.chassis.stop()
+        with self.lock:
+            self.heading_measurement = {"cell": list(node), "side": side,
+                                        "phase": "recenter", "point": 0,
+                                        "total": len(settings["scan_offsets_deg"])}
+        self._prepare_gimbal(force=True)
+        self._set_status("measuring_wall_heading")
+        sensor = self.settings["sensor"]
+        points = []
+        scans = []
+        for index, offset_deg in enumerate(settings["scan_offsets_deg"], 1):
+            with self.lock:
+                self.heading_measurement = {"cell": list(node), "side": side,
+                                            "phase": "scanning", "point": index,
+                                            "total": len(settings["scan_offsets_deg"])}
+            self.map.set_exploration_state(self.snapshot())
+            reading_mm, _ = self._scan_for_direction(
+                delta, yaw_offset_deg=offset_deg,
+                median_window=settings["samples_per_angle"])
+            current_pose = self._motion_pose()
+            if math.hypot(current_pose[0] - start_pose[0],
+                          current_pose[1] - start_pose[1]) > settings["max_stationary_shift_m"]:
+                raise MissionStop("chassis moved during wall heading measurement")
+            if (reading_mm < settings["min_range_m"] * 1000 or
+                    reading_mm > self.settings["wall_threshold_mm"]):
+                return record({"status": "skipped_range", "cell": list(node),
+                               "side": side, "reason": "fan scan did not hit the same nearby wall",
+                               "scans": scans})
+            yaw_deg = self.last_scan_relative_yaw_deg + sensor["yaw_offset_deg"]
+            ray = math.radians(yaw_deg)
+            offset = math.radians(yaw_deg + sensor["offset_yaw_deg"])
+            distance_m = reading_mm / 1000.0
+            px = (sensor["pivot_x_m"] +
+                  sensor["offset_from_yaw_axis_m"] * math.cos(offset) +
+                  distance_m * math.cos(ray))
+            py = (sensor["pivot_y_m"] +
+                  sensor["offset_from_yaw_axis_m"] * math.sin(offset) +
+                  distance_m * math.sin(ray))
+            points.append((px, py))
+            scans.append({"offset_deg": offset_deg, "yaw_deg": round(yaw_deg, 2),
+                          "range_mm": round(reading_mm, 1)})
+        center_yaw = scans[len(scans) // 2]["yaw_deg"]
+        normal, span, residual = self._fit_wall_normal(
+            points, center_yaw, settings["min_span_m"], settings["max_residual_m"])
+        result = {"cell": list(node), "side": side, "scans": scans,
+                  "span_m": round(span, 4),
+                  "residual_m": round(residual, 4) if residual is not None else None}
+        if normal is None:
+            return record({**result, "status": "skipped_geometry",
+                           "reason": "wall points are too close or not collinear"})
+        observed_yaw = self._current_yaw()
+        expected_normal = (self.base_pose[2] +
+                           math.degrees(math.atan2(delta[1], delta[0])))
+        correction = _wrap_degrees(expected_normal - normal - observed_yaw)
+        result.update({"wall_normal_relative_deg": round(normal, 2),
+                       "observed_yaw_deg": round(observed_yaw, 2),
+                       "correction_deg": round(correction, 2)})
+        previous_bias = getattr(self.chassis, "heading_bias_deg", 0.0)
+        new_bias = _wrap_degrees(previous_bias + correction)
+        self.chassis.set_heading_bias(new_bias)
+        self.slam_worker.set_heading_bias(new_bias)
+        return record({**result, "status": "applied", "heading_bias_deg": round(new_bias, 2)})
 
     def _can_step(self, node, destination):
         delta = (destination[0] - node[0], destination[1] - node[1])
@@ -952,6 +1073,9 @@ class DFSExplorer:
 
                 newly_scanned = current not in self.scanned_cells
                 clear = self._scan_all_directions(current)
+                if newly_scanned and self.settings["heading_alignment"]["enabled"]:
+                    self._align_heading(current)
+                    self._set_status("exploring")
                 if newly_scanned and self.settings["alignment"]["enabled"]:
                     self._align_cell(current)
                     clear = {delta: self.wall_grid.can_cross(current, delta)

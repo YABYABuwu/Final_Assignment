@@ -223,6 +223,11 @@ def main():
 
         motion_settings = config["motion"].copy()
         motion_settings["max_speed_m_s"] = args.speed
+        logger.motion_settings = {
+            "max_speed_m_s": motion_settings["max_speed_m_s"],
+            "braking_decel_m_s2": motion_settings["braking_decel_m_s2"],
+            "max_lateral_accel_m_s2": motion_settings["max_lateral_accel_m_s2"],
+        }
         chassis = ChassisController(ep_robot, logger, motion_settings)
         if config["rear_ir"]["enabled"]:
             chassis.rear_ir = RearIRBumper(logger, config["rear_ir"])
@@ -250,6 +255,7 @@ def main():
             ep_robot, logger, config["dashboard"],
             target_settings=config["exploration"]["target_inspection"],
             color_ranges=config["color_ranges"],
+            motion_settings=logger.motion_settings,
         )
         dashboard.start()
         host = config["dashboard"]["host"]

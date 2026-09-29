@@ -24,13 +24,19 @@ class ChassisController:
         self.pid_yaw = PIDController(**pid["yaw"], max_output=settings["max_turn_deg_s"])
         self.heading_reference = None
         self.gimbal_heading_offset = None
+        self.heading_bias_deg = 0.0
         self.commanded_lateral_m_s = 0.0
+        self.position_sample_time = None
         self.rear_ir = None
         self.front_ir = None
 
     def reset_heading(self):
         """Use the current heading as the reference on the next move_to call."""
         self.heading_reference = None
+
+    def set_heading_bias(self, bias_deg):
+        """Apply a wall-observed yaw correction to future pose readings."""
+        self.heading_bias_deg = angle_error(float(bias_deg), 0)
 
     def stop(self):
         """Send zero speed to all three axes."""
@@ -40,10 +46,15 @@ class ChassisController:
     def get_pose(self):
         """Return (x metres, y metres, yaw degrees), or None if data is stale."""
         age = self.settings["sample_timeout_s"]
-        position = self.logger.get_latest("position", max_age_s=age)
+        sample_getter = getattr(self.logger, "get_sample", None)
+        position_sample = (sample_getter("position", max_age_s=age)
+                           if callable(sample_getter) else None)
+        position = (position_sample[0] if position_sample is not None else
+                    self.logger.get_latest("position", max_age_s=age))
         attitude = self.logger.get_latest("attitude", max_age_s=age)
         if position is None or attitude is None:
             return None
+        self.position_sample_time = position_sample[1] if position_sample is not None else None
         yaw = float(attitude[0])
         if self.settings.get("heading_source", "attitude") == "gimbal":
             # Gimbal ground yaw and chassis-relative yaw come from one SDK
@@ -64,7 +75,7 @@ class ChassisController:
             if self.gimbal_heading_offset is None:
                 self.gimbal_heading_offset = angle_error(yaw, observed)
             yaw = angle_error(observed + self.gimbal_heading_offset, 0)
-        return position[0], position[1], yaw
+        return position[0], position[1], angle_error(yaw + self.heading_bias_deg, 0)
 
     def _recover_from_ir(self, bumper, side, attempt, period, deadline, abort_event,
                          pause_if, movement_axis="longitudinal"):
@@ -208,6 +219,10 @@ class ChassisController:
         period = self.settings["control_period_s"]
         deadline = None if timeout is None else time.monotonic() + timeout
         previous = time.monotonic()
+        previous_position = None
+        previous_position_time = None
+        approach_speed = 0.0
+        measured_speed = 0.0
         target_yaw = yaw
         recovery_attempts = {"front": 0, "rear": 0}
         if yaw is not None:
@@ -218,6 +233,10 @@ class ChassisController:
                     raise MissionStop("motion aborted because exploration telemetry failed")
                 if pause_if is not None and pause_if():
                     self.stop()
+                    previous_position = None
+                    previous_position_time = None
+                    approach_speed = 0.0
+                    measured_speed = 0.0
                     for pid in (self.pid_x, self.pid_y, self.pid_yaw):
                         pid.reset()
                     previous = time.monotonic()
@@ -226,6 +245,10 @@ class ChassisController:
                 pose = self.get_pose()
                 if pose is None:
                     self.stop()
+                    previous_position = None
+                    previous_position_time = None
+                    approach_speed = 0.0
+                    measured_speed = 0.0
                     for pid in (self.pid_x, self.pid_y, self.pid_yaw):
                         pid.reset()
                     previous = time.monotonic()
@@ -237,6 +260,10 @@ class ChassisController:
                     pose = self.get_pose()
                     if pose is None:
                         self.stop()
+                        previous_position = None
+                        previous_position_time = None
+                        approach_speed = 0.0
+                        measured_speed = 0.0
                         for pid in (self.pid_x, self.pid_y, self.pid_yaw):
                             pid.reset()
                         previous = time.monotonic()
@@ -249,28 +276,54 @@ class ChassisController:
                     target_yaw = self.heading_reference
                 error_x = x - current_x
                 error_y = y - current_y
+                distance = math.hypot(error_x, error_y)
                 heading_error = 0 if target_yaw is None else angle_error(target_yaw, current_yaw)
-
-                arrived = math.hypot(error_x, error_y) <= self.settings["position_tolerance_m"]
-                facing = target_yaw is None or abs(heading_error) <= self.settings["angle_tolerance_deg"]
-                if arrived and facing:
-                    return pose
-
                 now = time.monotonic()
                 dt = max(now - previous, 0.001)
                 previous = now
+                position_time = self.position_sample_time or now
+                if previous_position_time is not None and position_time > previous_position_time:
+                    sample_dt = position_time - previous_position_time
+                    displacement = (current_x - previous_position[0],
+                                    current_y - previous_position[1])
+                    measured = math.hypot(*displacement) / sample_dt
+                    measured_speed = min(measured, 2 * self.settings["max_speed_m_s"])
+                    if distance > 0 and measured <= 2 * self.settings["max_speed_m_s"]:
+                        measured = (displacement[0] * error_x + displacement[1] * error_y) / (sample_dt * distance)
+                        approach_speed = measured
+                if previous_position_time is None or position_time > previous_position_time:
+                    previous_position = (current_x, current_y)
+                    previous_position_time = position_time
+                arrival_speed = math.sqrt(2 * self.settings["braking_decel_m_s2"] *
+                                          self.settings["position_tolerance_m"])
+                arrived = (distance <= self.settings["position_tolerance_m"] and
+                           measured_speed <= arrival_speed)
+                facing = target_yaw is None or abs(heading_error) <= self.settings["angle_tolerance_deg"]
+                if arrived and facing:
+                    return pose
+                # Leave room for one control cycle of measured travel, then
+                # cap the command by the speed that can stop at the waypoint.
+                remaining = max(0.0, distance - max(0.0, approach_speed) * period)
+                braking_limit = math.sqrt(2 * self.settings["braking_decel_m_s2"] * remaining)
+                speed_limit = min(self.settings["max_speed_m_s"], braking_limit)
                 # Compute speeds in the fixed position frame, then rotate into
                 # the robot's forward/right frame used by drive_speed().
-                vx_world = self.pid_x.compute(error_x, dt)
-                vy_world = self.pid_y.compute(error_y, dt)
+                if self.pid_x.previous_error is not None and error_x * self.pid_x.previous_error < 0:
+                    self.pid_x.integral = 0.0
+                if self.pid_y.previous_error is not None and error_y * self.pid_y.previous_error < 0:
+                    self.pid_y.integral = 0.0
+                integral_x, integral_y = self.pid_x.integral, self.pid_y.integral
+                vx_world = self.pid_x.compute(error_x, dt, anti_windup=True)
+                vy_world = self.pid_y.compute(error_y, dt, anti_windup=True)
                 heading_rad = math.radians(current_yaw)
                 vx_robot = vx_world * math.cos(heading_rad) + vy_world * math.sin(heading_rad)
                 vy_robot = -vx_world * math.sin(heading_rad) + vy_world * math.cos(heading_rad)
                 speed = math.hypot(vx_robot, vy_robot)
-                limit = self.settings["max_speed_m_s"]
-                if speed > limit:
-                    vx_robot *= limit / speed
-                    vy_robot *= limit / speed
+                if speed > speed_limit:
+                    # A capped command cannot use additional integral effort.
+                    self.pid_x.integral, self.pid_y.integral = integral_x, integral_y
+                    vx_robot *= speed_limit / speed
+                    vy_robot *= speed_limit / speed
                 # Ramp only chassis-sideways speed. Forward/backward PID speed
                 # remains immediate; braking and emergency stops stay immediate.
                 old_y = self.commanded_lateral_m_s
@@ -299,6 +352,10 @@ class ChassisController:
                                            else "longitudinal"))
                     for pid in (self.pid_x, self.pid_y, self.pid_yaw):
                         pid.reset()
+                    previous_position = None
+                    previous_position_time = None
+                    approach_speed = 0.0
+                    measured_speed = 0.0
                     previous = time.monotonic()
                     time.sleep(period)
                     continue

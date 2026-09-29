@@ -95,6 +95,20 @@ class ReviewTests(unittest.TestCase):
             self.assertTrue(any("movement ToF" in issue["message"] for issue in issues))
             self.assertTrue(any("0.059 m" in issue["message"] for issue in issues))
 
+    def test_wall_heading_rejection_is_visible_in_review(self):
+        with tempfile.TemporaryDirectory() as temp:
+            run_dir = Path(temp) / "heading_rejected"
+            run_dir.mkdir()
+            (run_dir / "run_summary.json").write_text(json.dumps({
+                "status": "stopped", "error": "wall heading correction exceeded safe limit",
+                "exploration": {"heading_alignments": {"1,0": {
+                    "status": "stopped_large_angle",
+                    "reason": "wall angle correction exceeds the configured limit",
+                }}},
+            }), encoding="utf-8")
+            messages = [issue["message"] for issue in RunStore(temp).load_run(run_dir.name)["issues"]]
+            self.assertTrue(any("Wall heading 1,0" in message for message in messages))
+
     def test_unconfirmed_cell_center_is_visible_in_review(self):
         with tempfile.TemporaryDirectory() as temp:
             run_dir = Path(temp) / "off_center"

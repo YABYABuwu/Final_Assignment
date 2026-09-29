@@ -105,7 +105,7 @@ def load_config(path=DEFAULT_CONFIG):
     if not isinstance(motion.get("hold_heading"), bool):
         raise ValueError("motion.hold_heading must be true or false")
     for name in ("position_tolerance_m", "angle_tolerance_deg", "timeout_s",
-                 "sample_timeout_s", "control_period_s", "max_speed_m_s", "max_lateral_accel_m_s2",
+                 "sample_timeout_s", "control_period_s", "max_speed_m_s", "braking_decel_m_s2", "max_lateral_accel_m_s2",
                  "max_turn_deg_s"):
         if (not isinstance(motion.get(name), (int, float)) or
                 not math.isfinite(motion[name]) or motion[name] <= 0):
@@ -253,6 +253,30 @@ def load_config(path=DEFAULT_CONFIG):
         raise ValueError("exploration.alignment.tolerance_m must be below wall_distance_m")
     if alignment["max_shift_m"] >= exploration["step_m"] / 2:
         raise ValueError("exploration.alignment.max_shift_m must be below half a grid step")
+    heading_alignment = exploration.get("heading_alignment")
+    if not isinstance(heading_alignment, dict):
+        raise ValueError("exploration.heading_alignment must be a mapping")
+    if not isinstance(heading_alignment.get("enabled"), bool):
+        raise ValueError("exploration.heading_alignment.enabled must be true or false")
+    offsets = heading_alignment.get("scan_offsets_deg")
+    if (not isinstance(offsets, list) or len(offsets) < 3 or len(offsets) > 9 or
+            len(offsets) % 2 != 1 or
+            any(type(value) not in (int, float) or not math.isfinite(value) or
+                abs(value) > 40 for value in offsets) or
+            offsets != sorted(offsets) or len(set(offsets)) != len(offsets) or
+            offsets[len(offsets) // 2] != 0):
+        raise ValueError("exploration.heading_alignment.scan_offsets_deg needs sorted distinct angles around 0")
+    samples_per_angle = heading_alignment.get("samples_per_angle")
+    if (type(samples_per_angle) is not int or samples_per_angle < 1 or
+            samples_per_angle > 9 or samples_per_angle % 2 != 1):
+        raise ValueError("exploration.heading_alignment.samples_per_angle must be an odd integer from 1 to 9")
+    for name in ("min_range_m", "min_span_m", "max_residual_m",
+                 "max_stationary_shift_m"):
+        value = heading_alignment.get(name)
+        if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
+            raise ValueError(f"exploration.heading_alignment.{name} must be positive")
+    if heading_alignment["min_range_m"] * 1000 >= exploration["wall_threshold_mm"]:
+        raise ValueError("exploration.heading_alignment.min_range_m must be below wall_threshold_mm")
     emergency_distance = exploration.get("emergency_stop_distance_m")
     if (type(emergency_distance) not in (int, float) or
             not math.isfinite(emergency_distance) or emergency_distance <= 0):

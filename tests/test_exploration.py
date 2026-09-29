@@ -134,7 +134,128 @@ class ExplorationTests(unittest.TestCase):
         self.settings["alignment"].update({"enabled": True, "wall_distance_m": .25,
                                            "tolerance_m": .03, "max_shift_m": .20})
         self.settings["target_inspection"]["enabled"] = False
+        self.settings["heading_alignment"]["enabled"] = False
         self.ranges = [2000, 2000, 2000, 2000]
+
+    def test_wall_heading_recenter_precedes_fan_and_corrects_yaw_bias(self):
+        self.settings["heading_alignment"]["enabled"] = True
+        slam_map = self.make_map()
+        calls = []
+        chassis = SimpleNamespace(heading_bias_deg=0.0,
+                                  get_pose=lambda: (0.0, 0.0, 0.0),
+                                  stop=lambda: calls.append("stop"))
+        def set_bias(value):
+            chassis.heading_bias_deg = value
+            calls.append("chassis_bias")
+        chassis.set_heading_bias = set_bias
+        worker = SimpleNamespace(set_heading_bias=lambda value: calls.append("slam_bias"),
+                                 status=lambda: {"error": None})
+        explorer = DFSExplorer(chassis, None, FakeLogger(), slam_map, self.settings)
+        explorer.slam_worker = worker
+        explorer.base_pose = (0.0, 0.0, 0.0)
+        explorer.wall_grid.observe((0, 0), (1, 0), .28, 205, 300, time.time())
+        explorer._prepare_gimbal = lambda force=False: calls.append("recenter" if force else "prepare")
+        def scan(delta, yaw_offset_deg=0.0, median_window=None):
+            calls.append("scan")
+            self.assertEqual(median_window, 3)
+            explorer.last_scan_relative_yaw_deg = yaw_offset_deg
+            phi = math.radians(yaw_offset_deg)
+            wall_normal = math.radians(-4.0)
+            projection = math.cos(phi - wall_normal)
+            distance = (.28 - .075 * projection) / projection
+            return distance * 1000, yaw_offset_deg
+        explorer._scan_for_direction = scan
+
+        result = explorer._align_heading((0, 0))
+
+        self.assertEqual(calls[:3], ["stop", "recenter", "scan"])
+        self.assertEqual(result["status"], "applied")
+        self.assertAlmostEqual(result["correction_deg"], 4.0, places=1)
+        self.assertAlmostEqual(chassis.heading_bias_deg, 4.0, places=1)
+        self.assertEqual(calls.count("scan"), 5)
+        self.assertEqual(calls[-2:], ["chassis_bias", "slam_bias"])
+        self.assertEqual(explorer.snapshot()["heading_alignments"]["0,0"]["status"], "applied")
+
+    def test_wall_heading_rejects_noncollinear_returns(self):
+        self.settings["heading_alignment"]["enabled"] = True
+        slam_map = self.make_map()
+        chassis = SimpleNamespace(heading_bias_deg=0.0,
+                                  get_pose=lambda: (0.0, 0.0, 0.0), stop=lambda: None,
+                                  set_heading_bias=lambda value: self.fail("invalid wall changed yaw"))
+        explorer = DFSExplorer(chassis, None, FakeLogger(), slam_map, self.settings)
+        explorer.slam_worker = SimpleNamespace(
+            set_heading_bias=lambda value: self.fail("invalid wall changed map yaw"),
+            status=lambda: {"error": None})
+        explorer.base_pose = (0.0, 0.0, 0.0)
+        explorer.wall_grid.observe((0, 0), (1, 0), .28, 205, 300, time.time())
+        explorer._prepare_gimbal = lambda force=False: None
+        def scan(delta, yaw_offset_deg=0.0, median_window=None):
+            explorer.last_scan_relative_yaw_deg = yaw_offset_deg
+            return (270 if yaw_offset_deg == 0 else 205), yaw_offset_deg
+        explorer._scan_for_direction = scan
+
+        result = explorer._align_heading((0, 0))
+        self.assertEqual(result["status"], "skipped_geometry")
+        self.assertEqual(chassis.heading_bias_deg, 0.0)
+
+    def test_wall_heading_applies_reliable_large_angle(self):
+        self.settings["heading_alignment"]["enabled"] = True
+        slam_map = self.make_map()
+        chassis = SimpleNamespace(heading_bias_deg=0.0,
+                                  get_pose=lambda: (0.0, 0.0, 0.0), stop=lambda: None)
+        chassis.set_heading_bias = lambda value: setattr(chassis, "heading_bias_deg", value)
+        explorer = DFSExplorer(chassis, None, FakeLogger(), slam_map, self.settings)
+        slam_biases = []
+        explorer.slam_worker = SimpleNamespace(status=lambda: {"error": None},
+                                               set_heading_bias=slam_biases.append)
+        explorer.base_pose = (0.0, 0.0, 0.0)
+        explorer.wall_grid.observe((0, 0), (1, 0), .28, 205, 300, time.time())
+        explorer._prepare_gimbal = lambda force=False: None
+        def scan(delta, yaw_offset_deg=0.0, median_window=None):
+            explorer.last_scan_relative_yaw_deg = yaw_offset_deg
+            projection = math.cos(math.radians(yaw_offset_deg + 10))
+            return (.28 / projection - .075) * 1000, yaw_offset_deg
+        explorer._scan_for_direction = scan
+
+        result = explorer._align_heading((0, 0))
+        self.assertEqual(result["status"], "applied")
+        self.assertAlmostEqual(result["correction_deg"], 10.0, places=1)
+        self.assertAlmostEqual(chassis.heading_bias_deg, 10.0, places=1)
+        self.assertAlmostEqual(slam_biases[-1], 10.0, places=1)
+
+    def test_forced_recenter_waits_for_action_release_before_heading_scan(self):
+        self.settings["gimbal"]["auto_recenter"] = False
+        logger = FakeLogger()
+        logger.set("gimbal", (0, 0, 0, 0), time.time() + 1)
+        calls = []
+        class SlowAction:
+            polls = 0
+            state = "action_running"
+            @property
+            def has_succeeded(self):
+                self.polls += 1
+                return self.polls >= 3
+            def wait_for_completed(self):
+                calls.append("released")
+                return True
+        gimbal = SimpleNamespace(recenter=lambda **kwargs: calls.append("recenter") or SlowAction())
+        explorer = DFSExplorer(SimpleNamespace(stop=lambda: None), gimbal, logger,
+                               self.make_map(), self.settings)
+        explorer.slam_worker = FakeSlamWorker()
+
+        explorer._prepare_gimbal(force=True)
+        self.assertEqual(calls, ["recenter", "released"])
+
+    def test_forced_recenter_rejects_failed_action(self):
+        logger = FakeLogger()
+        logger.set("gimbal", (0, 0, 0, 0), time.time() + 1)
+        action = SimpleNamespace(has_succeeded=False, state="action_failed")
+        gimbal = SimpleNamespace(recenter=lambda **kwargs: action)
+        explorer = DFSExplorer(SimpleNamespace(stop=lambda: None), gimbal, logger,
+                               self.make_map(), self.settings)
+        explorer.slam_worker = FakeSlamWorker()
+        with self.assertRaisesRegex(MissionStop, "gimbal recenter failed"):
+            explorer._prepare_gimbal(force=True)
 
     def make_map(self):
         slam_map = OccupancyGridSLAM(self.settings)
@@ -1370,12 +1491,14 @@ class ExplorationTests(unittest.TestCase):
         logger.set("status", (0,) * 10, timestamp)
         slam_map = OccupancyGridSLAM(self.settings)
         worker = SlamWorker(logger, slam_map, self.settings)
+        worker.set_heading_bias(4.0)
         worker.start()
         try:
             worker.wait_ready(timeout_s=2)
             self.assertTrue(worker.status()["ready"])
             self.assertEqual(slam_map.scan_count, 1)
             self.assertEqual(slam_map.latest_gimbal_yaw_deg, 0)
+            self.assertAlmostEqual(slam_map.pose[2], 4.0)
         finally:
             worker.stop()
 

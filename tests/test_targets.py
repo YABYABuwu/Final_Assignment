@@ -164,6 +164,8 @@ class TargetTests(unittest.TestCase):
 
     def test_wall_inspection_fires_two_shots_after_lock_and_restores_scan_pitch(self):
         inspector, gimbal, worker, calls = self.make_inspector()
+        inspector.settings["target_inspection"]["aim_offset_x_fraction"] = 0.0
+        inspector.settings["target_inspection"]["aim_offset_y_fraction"] = 0.0
         result = inspector.inspect((0, 0), (1, 0), 0, 0)
         self.assertEqual(result["status"], "targets_checked")
         self.assertEqual(result["targets"][0]["status"], "fire_command_accepted")

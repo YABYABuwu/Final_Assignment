@@ -67,6 +67,7 @@
     <div class="card metric"><span class="muted">ระยะเวลา</span><strong id="duration">—</strong></div>
     <div class="card metric"><span class="muted">CSV stream</span><strong id="stream-count">—</strong></div>
     <div class="card metric"><span class="muted">แถวที่ข้าม</span><strong id="dropped">—</strong></div>
+    <div class="card metric"><span class="muted">ค่าชะลอเข้า waypoint</span><strong id="braking-decel">—</strong></div>
   </div>
   <div class="card timeline">
     <button id="play" type="button">▶ เล่น</button>
@@ -353,6 +354,8 @@
       document.getElementById("duration").textContent = `${format(run.duration_s)} s`;
       document.getElementById("stream-count").textContent = Object.keys(run.streams).length;
       document.getElementById("dropped").textContent = run.summary.dropped_csv_rows ?? "—";
+      document.getElementById("braking-decel").textContent = run.summary.motion_settings?.braking_decel_m_s2 != null
+        ? `${run.summary.motion_settings.braking_decel_m_s2.toFixed(2)} m/s²` : "—";
       document.getElementById("seek").max = Math.max(.01, run.duration_s);
       const wallPanel=document.getElementById("wall-grid-review"); wallPanel.replaceChildren();
       const wallGrid=run.summary.exploration?.cell_grid;
@@ -390,6 +393,18 @@
           wallPanel.append(note);
         }
         const alignments=run.summary.exploration?.alignments;
+        const headingAlignments=run.summary.exploration?.heading_alignments || {};
+        if (run.summary.exploration?.heading_alignment_enabled === false) {
+          const note=document.createElement("p"); note.textContent="จัดมุมจากกำแพง: ปิด"; wallPanel.append(note);
+        } else if (Object.keys(headingAlignments).length) {
+          const note=document.createElement("p");
+          note.textContent="จัดมุมจากกำแพง: "+Object.entries(headingAlignments).map(([cell,result])=>
+            result.status === "applied"
+              ? `${cell} ด้าน ${result.side} แก้ ${result.correction_deg.toFixed(1)}° · bias ${result.heading_bias_deg.toFixed(1)}° · จุดกระจาย ${(result.span_m*100).toFixed(1)} ซม. · คลาดเส้น ${(result.residual_m*100).toFixed(1)} ซม.`
+              : `${cell} ไม่ใช้ผล: ${result.reason || result.status}`
+          ).join(" · ");
+          wallPanel.append(note);
+        }
         const emergencyLimit=run.summary.exploration?.emergency_stop_distance_m;
         if (emergencyLimit != null) {
           const note=document.createElement("p");

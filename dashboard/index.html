@@ -89,7 +89,7 @@
           <label class="muted"><input id="fine-map" type="checkbox"> แสดง occupancy ละเอียด</label>
           <canvas id="map" aria-label="เส้นทาง ตำแหน่ง และทิศหุ่นยนต์"></canvas>
           <div class="map-legend"><span class="key" style="--key:#8cf1d2">ขอบทางเปิด</span><span class="key" style="--key:#ffb868">กำแพง</span><span class="key" style="--key:#718594">เส้นประ: ยังไม่รู้/อนุมาน</span><span class="key" style="--key:#69d9ff">เส้นทาง</span></div>
-          <div class="map-info"><div>DFS&nbsp; <strong id="dfs-status">ปิด</strong></div><div id="map-counts">รอข้อมูลแผนที่</div><div id="pose">X — · Y — · Yaw —</div><div>ความเร็ว&nbsp; <strong id="speed">— m/s</strong></div><div>อัตราเร่งสไลด์ซ้าย/ขวาสูงสุด&nbsp; <strong id="acceleration">— m/s²</strong></div><div>Gimbal&nbsp; <span id="gimbal-map">—</span></div><div>DFS เลือกขอบทางเปิดจาก ToF ที่สแกนใหม่</div><div>ทิศแผนที่: ↑ +X เหนือ · ↓ −X ใต้ · → +Y ตะวันออก</div><div id="tof-model">ToF: —</div><div id="cell-sides"></div><div id="target-inspections">ตรวจเป้าที่กำแพง: รอข้อมูล</div><div id="map-message"></div></div>
+          <div class="map-info"><div>DFS&nbsp; <strong id="dfs-status">ปิด</strong></div><div id="map-counts">รอข้อมูลแผนที่</div><div id="pose">X — · Y — · Yaw —</div><div>ความเร็ว&nbsp; <strong id="speed">— m/s</strong></div><div>อัตราเร่งสไลด์ซ้าย/ขวาสูงสุด&nbsp; <strong id="acceleration">— m/s²</strong></div><div>ค่าชะลอเข้า waypoint&nbsp; <strong id="braking">— m/s²</strong></div><div>Gimbal&nbsp; <span id="gimbal-map">—</span></div><div id="heading-alignment">จัดมุมจากกำแพง: รอข้อมูล</div><div>DFS เลือกขอบทางเปิดจาก ToF ที่สแกนใหม่</div><div>ทิศแผนที่: ↑ +X เหนือ · ↓ −X ใต้ · → +Y ตะวันออก</div><div id="tof-model">ToF: —</div><div id="cell-sides"></div><div id="target-inspections">ตรวจเป้าที่กำแพง: รอข้อมูล</div><div id="map-message"></div></div>
         </div>
       </section>
     </div>
@@ -144,6 +144,16 @@
       const canvas = document.getElementById("map");
       const {context: ctx, width: w, height: h} = canvasContext(canvas);
       ctx.clearRect(0, 0, w, h);
+      const wallHeading=slamMap?.exploration?.last_heading_alignment;
+      const headingProgress=slamMap?.exploration?.heading_measurement;
+      document.getElementById("heading-alignment").textContent = slamMap?.exploration?.heading_alignment_enabled === false
+        ? "จัดมุมจากกำแพง: ปิด"
+        : headingProgress
+          ? `จัดมุมจากกำแพงช่อง ${headingProgress.cell.join(",")} ด้าน ${headingProgress.side}: ${headingProgress.phase === "recenter" ? "ตั้งศูนย์ gimbal" : `สแกนจุด ${headingProgress.point}/${headingProgress.total}`}`
+        : !wallHeading ? "จัดมุมจากกำแพง: รอวัด"
+        : wallHeading.status === "applied"
+          ? `จัดมุมจากกำแพงช่อง ${wallHeading.cell.join(",")} ด้าน ${wallHeading.side}: แก้ ${number(wallHeading.correction_deg)}° · bias ${number(wallHeading.heading_bias_deg)}° · จุดกระจาย ${number(wallHeading.span_m*100)} ซม. · คลาดเส้น ${number(wallHeading.residual_m*100)} ซม.`
+          : `จัดมุมจากกำแพงช่อง ${wallHeading.cell.join(",")}: ไม่ใช้ผล (${wallHeading.reason || wallHeading.status})`;
       const sensor = slamMap?.sensor_model;
       if (sensor?.type === "single_gimbal_tof") {
         document.getElementById("tof-label").textContent = `ToF #${sensor.tof_channel}`;
@@ -397,6 +407,8 @@
         backtrackTarget ? `กลับช่อง ${backtrackTarget[1]},${backtrackTarget[2]} · ใช้ขอบที่บันทึกไว้` :
         dfsStatus === "returning_to_start" ? "กลับจุดเริ่ม · ใช้ขอบที่บันทึกไว้" :
         dfsStatus === "centering_gimbal" ? "กำลังตั้งศูนย์ gimbal ก่อนเริ่ม DFS" :
+        dfsStatus === "recenter_for_heading" ? "กำลังตั้งศูนย์ gimbal ก่อนวัดมุมกำแพง" :
+        dfsStatus === "measuring_wall_heading" ? "หยุดนิ่ง · วัดมุมกำแพงหลายจุด" :
         dfsStatus === "waiting_gimbal_action" ? "รอ SDK ยืนยันว่าหัวหมุนเสร็จ" :
         dfsStatus === "waiting_gimbal_alignment" ? "รอมุม gimbal เข้าช่วงที่กำหนด" :
         dfsStatus === "waiting_tof" ? "รอระยะ ToF ที่ใช้ได้" :
@@ -405,7 +417,7 @@
         dfsStatus === "inspecting_wall_target" ? "หยุดนิ่ง · ก้มกล้องตรวจเป้าที่กำแพง" :
         dfsStatus === "aligning" ? "จัดตำแหน่งกลางช่องจากกำแพง" : dfsStatus;
       document.getElementById("map-message").textContent = map.exploration?.error || `scan ${map.scan_count ?? 0} · match ${map.localization_score ?? "—"}`;
-      let poseText = map.pose ? `X ${number(map.pose[0])} · Y ${number(map.pose[1])} · Yaw chassis ${number(map.pose[2])}°` : "รอ pose จาก SLAM";
+      let poseText = map.pose ? `X ${number(map.pose[0])} · Y ${number(map.pose[1])} · Yaw แผนที่ ${number(map.pose[2])}°` : "รอ pose จาก SLAM";
       if (map.exploration?.heading_source === "gimbal" && latest.gimbal?.length >= 4) {
         const yawEstimate=((Number(latest.gimbal[3])-Number(latest.gimbal[1])+540)%360)-180;
         if (Number.isFinite(yawEstimate)) poseText += ` · Yaw จาก gimbal ≈ ${number(yawEstimate)}°`;
@@ -572,6 +584,8 @@
         }
         document.getElementById("acceleration").textContent = status.motion_settings?.max_lateral_accel_m_s2 != null
           ? `${number(status.motion_settings.max_lateral_accel_m_s2, 2)} m/s²` : "— m/s²";
+        document.getElementById("braking").textContent = status.motion_settings?.braking_decel_m_s2 != null
+          ? `${number(status.motion_settings.braking_decel_m_s2, 2)} m/s²` : "— m/s²";
         document.getElementById("connection").textContent = "● เชื่อมต่อแล้ว";
         const tofChannel = Number(slamMap?.sensor_model?.tof_channel ?? 0);
         const tofValue = status.streams.tof?.[tofChannel];

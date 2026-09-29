@@ -64,6 +64,7 @@ def main():
             )
             motion_settings["heading_source"] = exploration_settings["heading_source"]
         logger.motion_settings = {"max_speed_m_s": motion_settings["max_speed_m_s"],
+                                  "braking_decel_m_s2": motion_settings["braking_decel_m_s2"],
                                   "max_lateral_accel_m_s2": motion_settings["max_lateral_accel_m_s2"]}
         chassis = ChassisController(ep_robot, logger, motion_settings)
         if config["rear_ir"]["enabled"]:

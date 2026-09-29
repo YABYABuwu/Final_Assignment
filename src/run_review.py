@@ -95,6 +95,10 @@ class RunStore:
             if alignment.get("status") == "stalled" or alignment.get("status", "").startswith("skipped_"):
                 issues.append({"level": "warning", "time_s": None,
                                "message": f"Alignment {cell}: {alignment.get('reason') or alignment['status']}"})
+        for cell, alignment in (summary.get("exploration") or {}).get("heading_alignments", {}).items():
+            if alignment.get("status") not in ("applied", "no_suitable_wall"):
+                issues.append({"level": "warning", "time_s": None,
+                               "message": f"Wall heading {cell}: {alignment.get('reason') or alignment['status']}"})
         motion_stop = (summary.get("exploration") or {}).get("last_motion_stop") or {}
         if motion_stop.get("center_confirmed") is False:
             issues.append({"level": "warning", "time_s": None,

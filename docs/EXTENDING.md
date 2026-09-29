@@ -16,7 +16,8 @@
 | --- | --- | --- |
 | เซนเซอร์ SDK ใหม่ | เพิ่ม entry ใน `src/logger.py:STREAMS`; รองรับรูปข้อมูล callback ถ้าจำเป็น | `config/settings.yaml`, `src/config_loader.py`, tests, กราฟ/หน่วยใน `dashboard/index.html`, CSV และ `review/index.html` |
 | ข้อมูลคำนวณจาก stream เดิม | อ่านจาก `SensorLogger` ครั้งเดียว; กำหนดหน่วย/อายุข้อมูล/แหล่งที่มา | เลือกเผยแพร่เป็น stream หรือ field สถานะที่มีสัญญาชัด; live dashboard, CSV/review หากต้องย้อนหลัง |
-| พฤติกรรมขับรถหรือ mission | `src/chassis.py` หรือโมดูลที่ใช้ `ChassisController`; ประสานวงจรชีวิตใน `main.py` | config รวม `motion.max_lateral_accel_m_s2`, การหยุดเมื่อ error/timeout, mission status ใน dashboard, สถานะผลลัพธ์ใน summary/review |
+| พฤติกรรมขับรถหรือ mission | `src/chassis.py` หรือโมดูลที่ใช้ `ChassisController`; ประสานวงจรชีวิตใน `main.py` | config รวม `motion.max_lateral_accel_m_s2` และ `motion.braking_decel_m_s2`, การหยุดเมื่อ error/timeout, mission status ใน dashboard, สถานะผลลัพธ์ใน summary/review |
+| การจัดมุมรถจากกำแพง | `src/explorer.py` ใช้ `SensorLogger`/`SlamWorker`/`ChassisController` เดิม | recenter ก่อนวัดทุกชุด, รอ SDK action จบและ ToF สดครบแต่ละมุม, ตรวจเส้นผนังและการหยุดนิ่ง, ปรับ yaw bias เฉพาะผลที่อยู่ในเกณฑ์, บันทึกผล/เหตุข้ามบน dashboard และ review |
 | กฎแจ้งเตือนหรือเหตุผิดปกติ | ใช้ค่าที่ logger เก็บและกำหนด threshold ใน config | สถานะและเวลาเกิดบน dashboard สด, การบันทึก/ตรวจย้อนหลังใน review ถ้าต้องสืบเหตุ |
 | UI ใหม่ | ใช้ `/api/status` และ `/api/history` ก่อนเพิ่ม endpoint | ชื่อ/หน่วย/สถานะไม่มีข้อมูล, การเปิดปิด stream, หน้า review เมื่อข้อมูลถูกบันทึก |
 | SLAM/การสำรวจ | ใช้ `SensorLogger` stream `position`, `attitude`, `gimbal`, `tof`, `status`; เลือก ToF channel ตาม config; `DFSExplorer` สั่ง gimbal scan และเรียก `ChassisController` เดิม | offset จากแกน yaw, ตำแหน่ง pivot, อายุข้อมูลและการซิงก์, safety status, status DFS, `/api/map`, dashboard overlay และ import/export JSON/ROS |

@@ -816,6 +816,11 @@ class SlamWorker:
         self.abort_event = threading.Event()
         self.started_at = None
         self.last_good_scan_monotonic = None
+        self.heading_bias_deg = 0.0
+
+    def set_heading_bias(self, bias_deg):
+        with self.lock:
+            self.heading_bias_deg = _wrap_degrees(float(bias_deg))
 
     def start(self):
         if self.is_running:
@@ -866,6 +871,7 @@ class SlamWorker:
                     synchronized = max(timestamps) - min(timestamps) <= self.settings["sample_skew_s"]
                     with self.lock:
                         mapping_paused = self.mapping_paused
+                        heading_bias_deg = self.heading_bias_deg
                     try:
                         pitch_aligned = (abs(float(gimbal_values[0]) -
                                              self.settings["gimbal"]["pitch_deg"]) <=
@@ -877,7 +883,8 @@ class SlamWorker:
                             self.waiting_telemetry = True
                     elif timestamp != self.last_tof_timestamp:
                         if self.map.scan_is_valid(reading_mm, gimbal_yaw_deg):
-                            pose = (position[0][0], position[0][1], attitude[0][0])
+                            pose = (position[0][0], position[0][1],
+                                    _wrap_degrees(attitude[0][0] + heading_bias_deg))
                             self.map.update(pose, reading_mm, timestamp=timestamp,
                                             gimbal_yaw_deg=gimbal_yaw_deg)
                             self.last_tof_timestamp = timestamp

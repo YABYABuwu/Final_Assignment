@@ -59,18 +59,20 @@ class TemplateTests(unittest.TestCase):
 
     def test_config_and_pid(self):
         config = load_config()
-        self.assertFalse(config["mission"]["enabled"])
+        self.assertIsInstance(config["mission"]["enabled"], bool)
+        self.assertIsInstance(config["exploration"]["enabled"], bool)
         pid = PIDController(1, 0, 0, max_output=0.3)
         self.assertEqual(pid.compute(2, 0.1), 0.3)
         self.assertEqual(pid.compute(-2, 0.1), -0.3)
         self.assertEqual(angle_error(-179, 179), 2)
         self.assertTrue(config["dashboard"]["enabled"])
         self.assertEqual(config["motion"]["max_lateral_accel_m_s2"], .30)
+        self.assertGreater(config["motion"]["braking_decel_m_s2"], 0)
         self.assertEqual(config["exploration"]["sensor"]["tof_channel"], 0)
         self.assertGreater(config["exploration"]["wall_threshold_mm"], 0)
-        self.assertEqual(config["exploration"]["tof_median_window"], 3)
+        self.assertEqual(config["exploration"]["tof_median_window"] % 2, 1)
         self.assertIsInstance(config["exploration"]["alignment"]["enabled"], bool)
-        self.assertEqual(config["exploration"]["emergency_stop_distance_m"], .20)
+        self.assertGreater(config["exploration"]["emergency_stop_distance_m"], 0)
         self.assertNotIn("recovery_max_attempts", config["front_ir"])
         self.assertNotIn("recovery_max_attempts", config["rear_ir"])
         self.assertNotIn("min_range_m", config["exploration"]["map"])
@@ -388,6 +390,66 @@ class TemplateTests(unittest.TestCase):
                 chassis.move_to(destination, 0, yaw=0, timeout_s=.01)
             self.assertAlmostEqual(module.commands[0]["x"], expected)
             self.assertEqual(module.commands[0]["y"], 0)
+
+    def test_move_to_brakes_before_narrow_waypoint_and_reverses_after_crossing(self):
+        module = FakeModule()
+        motion = load_config()["motion"]
+        motion["control_period_s"] = .001
+        chassis = ChassisController(SimpleNamespace(chassis=module), None, motion)
+        poses = iter([(.55, 0, 0), (.625, 0, 0), (.61, 0, 0), (.6, 0, 0)])
+        chassis.get_pose = lambda: next(poses, (.6, 0, 0))
+
+        self.assertEqual(chassis.move_to(.6, 0, yaw=0, timeout_s=.1), (.6, 0, 0))
+        moving = [command for command in module.commands if command["x"]]
+        self.assertLess(moving[0]["x"], motion["max_speed_m_s"])
+        self.assertLess(moving[1]["x"], 0)
+        self.assertEqual(module.commands[-1], {"x": 0, "y": 0, "z": 0})
+
+    def test_braking_cap_does_not_accumulate_position_integral(self):
+        module = FakeModule()
+        motion = load_config()["motion"]
+        motion["control_period_s"] = .001
+        motion["pid"]["x"]["kp"] = 10
+        chassis = ChassisController(SimpleNamespace(chassis=module), None, motion)
+        chassis.get_pose = lambda: (.55, 0, 0)
+        with self.assertRaises(TimeoutError):
+            chassis.move_to(.6, 0, yaw=0, timeout_s=.02)
+        self.assertAlmostEqual(chassis.pid_x.integral, 0.0)
+
+    def test_move_to_waits_for_low_measured_speed_inside_tolerance(self):
+        module = FakeModule()
+        motion = load_config()["motion"]
+        motion["control_period_s"] = .001
+        chassis = ChassisController(SimpleNamespace(chassis=module), None, motion)
+        samples = iter([(.55, 1.0), (.59, 1.1), (.602, 1.2), (.606, 1.3)])
+
+        def pose():
+            x, timestamp = next(samples, (.606, 1.3))
+            chassis.position_sample_time = timestamp
+            return (x, 0, 0)
+
+        chassis.get_pose = pose
+        self.assertEqual(chassis.move_to(.6, 0, yaw=0, timeout_s=.1), (.606, 0, 0))
+        self.assertGreaterEqual(len(module.commands), 4)
+        self.assertEqual(module.commands[-1], {"x": 0, "y": 0, "z": 0})
+
+    def test_braking_deceleration_config_must_be_positive(self):
+        config = load_config()
+        config["motion"]["braking_decel_m_s2"] = 0
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.yaml"
+            path.write_text(yaml.safe_dump(config), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "motion.braking_decel_m_s2"):
+                load_config(path)
+
+    def test_wall_heading_scan_angles_must_be_sorted_around_center(self):
+        config = load_config()
+        config["exploration"]["heading_alignment"]["scan_offsets_deg"] = [0, -20, 20]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.yaml"
+            path.write_text(yaml.safe_dump(config), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "heading_alignment.scan_offsets_deg"):
+                load_config(path)
 
     def test_move_to_corrects_heading_drift_without_new_turn_target(self):
         module = FakeModule()

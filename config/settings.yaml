@@ -8,7 +8,8 @@ motion:
   timeout_s: 15               # เวลาสูงสุดต่อ waypoint
   sample_timeout_s: 1.0       # หาก position/attitude เก่ากว่านี้ ให้หยุด
   control_period_s: 0.1       # ระยะเวลาระหว่างคำสั่งความเร็ว
-  max_speed_m_s: 0.4         # เพดานความเร็วรวมของแกน x/y
+  max_speed_m_s: 0.3         # เพดานความเร็วรวมของแกน x/y
+  braking_decel_m_s2: 0.3    # ค่าชะลอที่ใช้คำนวณความเร็วเมื่อเข้าใกล้ waypoint; ต้องสอบเทียบกับหุ่นจริง
   max_lateral_accel_m_s2: 0.30 # จำกัดการเร่งเฉพาะสไลด์ซ้าย/ขวา; เดินหน้า/ถอยหลังใช้ PID ตามเดิม
   max_turn_deg_s: 45          # เพดานความเร็วหมุน
   hold_heading: true          # yaw: null = รักษามุมเดิมข้าม waypoint ไม่ให้ drift สะสม
@@ -78,12 +79,12 @@ review:
 
 rear_ir:
   enabled: true
-  right: {id: 3, port: 2, active_io: 1} # หลังขวา: io_6; active_io เป็น fallback หากปิด auto calibration
+  right: {id: 3, port: 2, active_io: 0} # หลังขวา: io_6; active_io เป็น fallback หากปิด auto calibration
   left: {id: 4, port: 1, active_io: 0}  # หลังซ้าย: io_7; active_io เป็น fallback หากปิด auto calibration
-  auto_calibrate_io: true # ตอนเริ่มโปรแกรมถือว่ารอบรถว่าง แล้วหา polarity ของแต่ละตัวอัตโนมัติ
+  auto_calibrate_io: false # ตอนเริ่มโปรแกรมถือว่ารอบรถว่าง แล้วหา polarity ของแต่ละตัวอัตโนมัติ
   calibration_samples: 10 # ใช้ข้อมูลใหม่อย่างน้อย 10 sample ก่อนอนุญาตให้รถเคลื่อน
   calibration_min_consistency: 0.8 # ค่า idle ต้องเหมือนกันอย่างน้อย 80% เพื่อไม่ calibrate จาก noise
-  io_read_mode: "direct" # ใช้ get_io(ID, Port) ตลอด Run; ไม่สลับกลับ DDS stream กลางทาง
+  io_read_mode: "stream" # ใช้ get_io(ID, Port) ตลอด Run; ไม่สลับกลับ DDS stream กลางทาง
   max_age_s: 0.5          # ข้อมูลเก่ากว่านี้หยุดการถอย/สไลด์/หมุนจนได้ค่าใหม่
   recovery_speed_m_s: 0.08 # ความเร็วหลบ IR
   recovery_max_m: 0.12    # ระยะหลบสูงสุดต่อหนึ่งครั้ง
@@ -96,12 +97,12 @@ rear_ir:
 # Front/Rear calibrate polarity ใหม่ทุกครั้งที่เริ่มโปรแกรมหลังเปลี่ยนแบต
 front_ir:
   enabled: true
-  right: {id: 1, port: 1, active_io: 1} # หน้าขวา: io_1; fallback
+  right: {id: 1, port: 1, active_io: 0} # หน้าขวา: io_1; fallback
   left: {id: 4, port: 2, active_io: 0}  # หน้าซ้าย: io_8; fallback
-  auto_calibrate_io: true
+  auto_calibrate_io: false
   calibration_samples: 10
   calibration_min_consistency: 0.8
-  io_read_mode: "direct"
+  io_read_mode: "stream"
   max_age_s: 0.5
   recovery_speed_m_s: 0.08
   recovery_max_m: 0.12
@@ -114,18 +115,29 @@ mission:
   enabled: false          # เริ่มจาก false เพื่อไม่ให้รถวิ่งทันทีเมื่อทดสอบการเชื่อมต่อ
   waypoints:              # พิกัดสัมบูรณ์จากตำแหน่งเริ่มต้น; yaw: null = รักษาทิศเดิม
     - {x: 0.6, y: 0.0, yaw: null}
-    - {x: 1.2, y: 0.0, yaw: null}
-    - {x: 1.8, y: 0.0, yaw: null}
-    - {x: 1.8, y: 0.6, yaw: null}
-    - {x: 1.2, y: 0.6, yaw: null}
     - {x: 0.6, y: 0.6, yaw: null}
+    - {x: 0.0, y: 0.6, yaw: null}
+    - {x: 0.0, y: 0.0, yaw: null}
+    - {x: 0.6, y: 0.0, yaw: null}
+    - {x: 0.6, y: 0.6, yaw: null}
+    - {x: 0.0, y: 0.6, yaw: null}
+    - {x: 0.0, y: 0.0, yaw: null}
+    - {x: 0.6, y: 0.0, yaw: null}
+    - {x: 0.6, y: 0.6, yaw: null}
+    - {x: 0.0, y: 0.6, yaw: null}
+    - {x: 0.0, y: 0.0, yaw: null}
+    - {x: 0.6, y: 0.0, yaw: null}
+    - {x: 0.6, y: 0.6, yaw: null}
+    - {x: 0.0, y: 0.6, yaw: null}
+    - {x: 0.0, y: 0.0, yaw: null}
+
 
 
 exploration:
   enabled: true       # เปิดหลังสอบเทียบตำแหน่งแกน yaw/pivot และระยะหัว ToF; true = เริ่ม SLAM + DFS และสั่งรถเดิน
   position_coordinate_system: 1 # ผูกแผนที่กับพิกัดตั้งแต่เปิดหุ่นยนต์ เพื่อให้โหลดแผนที่เดิมได้ในรอบเปิดเครื่องเดียวกัน
   step_m: 0.60            # ขนาดช่องกริดกำแพง และระยะเดินระหว่างศูนย์กลางช่อง
-  max_speed_m_s: 0.4     # จำกัดความเร็วขณะสำรวจแยกจาก mission waypoint
+  max_speed_m_s: 0.3     # จำกัดความเร็วขณะสำรวจแยกจาก mission waypoint
   heading_source: attitude # อ่าน yaw จาก chassis ตอนเริ่ม DFS แล้วคงเป้าหมายทิศไว้; gimbal ground-relative เคยมีความคลาดสะสม
   wall_threshold_mm: 500 # ToF <= ค่านี้เป็นกำแพง; มากกว่านี้เป็นทางเปิด
   tof_median_window: 1   # ใช้ scan ใหม่ 3 ครั้งหลัง gimbal หยุด แล้วเลือกค่ากลางก่อนตัดสินใจ DFS
@@ -135,6 +147,14 @@ exploration:
     wall_distance_m: 0.28 # เป้าหมายเมื่อมีผนังฝั่งเดียว; สองฝั่งให้ระยะเท่ากัน
     tolerance_m: 0.02     # ไม่ขยับถ้าคลาดไม่เกิน 3 ซม.
     max_shift_m: 0.10     # ระยะขยับสูงสุดต่อช่วง; วัดผนังใหม่ก่อนขยับช่วงถัดไป
+  heading_alignment:
+    enabled: true         # เมื่อเปิด DFS ให้วัดมุมผนังขณะหยุดและปรับ yaw bias หลัง recenter
+    scan_offsets_deg: [-25, -12.5, 0, 12.5, 25] # ยิงผนังเดียวกันห้าจุดในกรอบตัวรถ
+    samples_per_angle: 3 # median จาก ToF ใหม่ 3 sample ต่อมุมหลัง SDK ปลด action
+    min_range_m: 0.15     # ใกล้กว่านี้จุดกระจายไม่พอหรือเสี่ยงชนผนัง
+    min_span_m: 0.12      # ระยะระหว่างจุดปลายของแนวผนังอย่างน้อย 12 ซม.
+    max_residual_m: 0.015 # จุดทุกจุดต้องอยู่ใกล้เส้นผนังไม่เกิน 1.5 ซม.
+    max_stationary_shift_m: 0.02 # หยุดรันหากรถเลื่อนระหว่างสแกนเกิน 2 ซม.
   max_nodes: 120           # จำกัดจำนวนช่องที่ DFS จะเข้าเยี่ยมต่อรอบ
   update_hz: 5
   max_sample_age_s: 1.0 # อายุสูงสุดของข้อมูลที่ใช้ตัดสินใจ; ไม่ใช่เวลารองาน
