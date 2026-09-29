@@ -1,0 +1,1045 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RoboMaster EP — Sensor Calibration & Test Dashboard</title>
+  <style>
+    :root {
+      --bg: #091017;
+      --card-bg: #111e2a;
+      --card-border: #223748;
+      --text: #eef6f9;
+      --muted: #8ea7ba;
+      --accent: #5fe0bd;
+      --accent-glow: rgba(95, 224, 189, 0.25);
+      --red: #ff5b5b;
+      --red-glow: rgba(255, 91, 91, 0.35);
+      --amber: #ffaa44;
+      --amber-glow: rgba(255, 170, 68, 0.35);
+      --blue: #54b2ff;
+      --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+      padding: 18px 24px 40px;
+      line-height: 1.45;
+    }
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 16px;
+      margin-bottom: 20px;
+      padding-bottom: 14px;
+      border-bottom: 1px solid var(--card-border);
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .brand-mark {
+      width: 14px;
+      height: 36px;
+      background: var(--accent);
+      border-radius: 4px;
+      box-shadow: 0 0 16px var(--accent);
+    }
+    h1 { font-size: 1.45rem; font-weight: 700; letter-spacing: 0.02em; }
+    .subtitle { color: var(--muted); font-size: 0.85rem; }
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 14px;
+      border-radius: 999px;
+      font-size: 0.82rem;
+      font-weight: 600;
+      background: #142823;
+      color: var(--accent);
+      border: 1px solid #285447;
+    }
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 8px var(--accent);
+    }
+    .status-badge.disconnected {
+      background: #2b1717;
+      color: var(--red);
+      border-color: #5c2424;
+    }
+    .status-badge.disconnected .status-dot {
+      background: var(--red);
+      box-shadow: 0 0 8px var(--red);
+    }
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(420px, 1.15fr) minmax(380px, 1fr);
+      gap: 20px;
+      max-width: 1800px;
+      margin: 0 auto;
+    }
+    @media (max-width: 980px) {
+      .layout { grid-template-columns: 1fr; }
+    }
+    .col { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 14px;
+      overflow: hidden;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.25);
+    }
+    .card-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 18px;
+      background: rgba(255,255,255,0.02);
+      border-bottom: 1px solid var(--card-border);
+    }
+    .card-title {
+      font-size: 0.95rem;
+      font-weight: 650;
+      color: #d6e8f0;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .card-body { padding: 16px 18px; }
+
+    /* Camera Feed */
+    .camera-wrap {
+      position: relative;
+      background: #000;
+      aspect-ratio: 16 / 9;
+      width: 100%;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .camera-wrap img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: block;
+    }
+    .crosshair {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 48px;
+      height: 48px;
+      pointer-events: none;
+    }
+    .crosshair::before, .crosshair::after {
+      content: "";
+      position: absolute;
+      background: rgba(95, 224, 189, 0.7);
+    }
+    .crosshair::before { left: 23px; top: 0; width: 2px; height: 48px; }
+    .crosshair::after { top: 23px; left: 0; height: 2px; width: 48px; }
+    .crosshair-center {
+      position: absolute;
+      left: 20px;
+      top: 20px;
+      width: 8px;
+      height: 8px;
+      border: 1px solid var(--accent);
+      border-radius: 50%;
+    }
+    .cam-overlay-tag {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      background: rgba(8, 16, 24, 0.85);
+      border: 1px solid rgba(95, 224, 189, 0.4);
+      border-radius: 6px;
+      padding: 4px 10px;
+      font-size: 0.78rem;
+      font-weight: 600;
+      color: var(--accent);
+      backdrop-filter: blur(4px);
+    }
+    .cam-fps-tag {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      background: rgba(8, 16, 24, 0.85);
+      border: 1px solid var(--card-border);
+      border-radius: 6px;
+      padding: 4px 10px;
+      font-size: 0.78rem;
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* Target Detection Table */
+    .targets-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.82rem;
+      margin-top: 10px;
+    }
+    .targets-table th, .targets-table td {
+      padding: 7px 10px;
+      text-align: left;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+    }
+    .targets-table th { color: var(--muted); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; }
+    .color-pill {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-weight: 600;
+      font-size: 0.76rem;
+    }
+    .color-red { background: rgba(255, 91, 91, 0.2); color: #ff8585; border: 1px solid rgba(255, 91, 91, 0.4); }
+    .color-green { background: rgba(95, 224, 189, 0.2); color: #84f2d3; border: 1px solid rgba(95, 224, 189, 0.4); }
+    .color-yellow { background: rgba(255, 214, 90, 0.2); color: #ffe07a; border: 1px solid rgba(255, 214, 90, 0.4); }
+    .color-blue { background: rgba(84, 178, 255, 0.2); color: #8ecbff; border: 1px solid rgba(84, 178, 255, 0.4); }
+
+    /* ToF Sensor Card */
+    .tof-hero {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 14px;
+    }
+    .tof-big-value {
+      font-size: 2.8rem;
+      font-weight: 800;
+      line-height: 1;
+      color: #ffffff;
+      font-variant-numeric: tabular-nums;
+    }
+    .tof-unit { font-size: 1.1rem; color: var(--muted); font-weight: 500; margin-left: 4px; }
+    .tof-cm { font-size: 1.25rem; color: var(--accent); margin-left: 12px; font-weight: 600; }
+    .state-badge {
+      padding: 6px 14px;
+      border-radius: 8px;
+      font-size: 0.85rem;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+    }
+    .badge-wall {
+      background: rgba(255, 170, 68, 0.18);
+      color: var(--amber);
+      border: 1px solid rgba(255, 170, 68, 0.45);
+      box-shadow: 0 0 12px rgba(255, 170, 68, 0.2);
+    }
+    .badge-open {
+      background: rgba(95, 224, 189, 0.16);
+      color: var(--accent);
+      border: 1px solid rgba(95, 224, 189, 0.45);
+      box-shadow: 0 0 12px rgba(95, 224, 189, 0.15);
+    }
+    .badge-emergency {
+      background: rgba(255, 91, 91, 0.2);
+      color: var(--red);
+      border: 1px solid rgba(255, 91, 91, 0.5);
+      box-shadow: 0 0 14px rgba(255, 91, 91, 0.3);
+      animation: pulse 1s infinite alternate;
+    }
+    @keyframes pulse {
+      from { opacity: 0.85; }
+      to { opacity: 1; }
+    }
+
+    /* Range Gauge Bar */
+    .gauge-wrap {
+      margin: 18px 0 10px;
+    }
+    .gauge-bar-bg {
+      position: relative;
+      height: 22px;
+      background: #0d1720;
+      border-radius: 11px;
+      border: 1px solid var(--card-border);
+      overflow: visible;
+    }
+    .zone-emergency {
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      background: rgba(255, 91, 91, 0.35);
+      border-radius: 11px 0 0 11px;
+    }
+    .zone-wall {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      background: rgba(255, 170, 68, 0.25);
+    }
+    .zone-open {
+      position: absolute;
+      right: 0;
+      top: 0;
+      bottom: 0;
+      background: rgba(95, 224, 189, 0.2);
+      border-radius: 0 11px 11px 0;
+    }
+    .gauge-needle {
+      position: absolute;
+      top: -6px;
+      width: 4px;
+      height: 34px;
+      background: #ffffff;
+      box-shadow: 0 0 8px #ffffff;
+      border-radius: 2px;
+      transform: translateX(-50%);
+      transition: left 0.15s ease-out;
+      z-index: 5;
+    }
+    .gauge-labels {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.72rem;
+      color: var(--muted);
+      margin-top: 8px;
+    }
+
+    /* Channels Sub-grid */
+    .channels-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px;
+      margin-top: 14px;
+    }
+    .channel-box {
+      background: #0d1722;
+      border: 1px solid rgba(255,255,255,0.06);
+      border-radius: 8px;
+      padding: 8px 10px;
+      text-align: center;
+    }
+    .channel-box.active {
+      border-color: var(--accent);
+      background: #11262d;
+    }
+    .channel-title { font-size: 0.72rem; color: var(--muted); margin-bottom: 2px; }
+    .channel-val { font-size: 0.95rem; font-weight: 700; color: #fff; }
+
+    /* IR Sensors Grid */
+    .bumper-group { margin-bottom: 14px; }
+    .bumper-group:last-child { margin-bottom: 0; }
+    .bumper-header {
+      font-size: 0.82rem;
+      font-weight: 600;
+      color: var(--muted);
+      margin-bottom: 8px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .ir-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+    .ir-card {
+      background: #0c1822;
+      border: 1px solid var(--card-border);
+      border-radius: 10px;
+      padding: 12px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      transition: border-color 0.2s, background 0.2s;
+    }
+    .ir-card.detected {
+      border-color: var(--red);
+      background: #251214;
+      box-shadow: 0 0 16px var(--red-glow);
+    }
+    .ir-card.clear {
+      border-color: #275245;
+      background: #0d211c;
+    }
+    .ir-top-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .ir-name { font-size: 0.88rem; font-weight: 700; color: #d6e8f0; }
+    .ir-indicator {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 9px;
+      border-radius: 999px;
+      font-size: 0.75rem;
+      font-weight: 700;
+    }
+    .ir-indicator.detected {
+      background: var(--red);
+      color: #fff;
+    }
+    .ir-indicator.clear {
+      background: #174236;
+      color: var(--accent);
+    }
+    .ir-details {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 4px 8px;
+      font-size: 0.74rem;
+      color: var(--muted);
+    }
+    .ir-detail-val {
+      color: #fff;
+      font-weight: 600;
+    }
+
+    /* Gimbal & Pose */
+    .controls-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+    .stat-box {
+      background: #0c1822;
+      border: 1px solid var(--card-border);
+      border-radius: 10px;
+      padding: 10px 14px;
+    }
+    .stat-label { font-size: 0.75rem; color: var(--muted); margin-bottom: 4px; }
+    .stat-value { font-size: 1.15rem; font-weight: 700; color: #fff; }
+
+    .btn-group {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .btn {
+      background: #172c3d;
+      border: 1px solid #2f506b;
+      color: #e6f2f7;
+      padding: 7px 12px;
+      border-radius: 7px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .btn:hover {
+      background: #233e54;
+      border-color: var(--accent);
+      color: #fff;
+    }
+    .btn:active { transform: translateY(1px); }
+    .btn-primary {
+      background: #184236;
+      border-color: #377d69;
+      color: var(--accent);
+    }
+    .btn-primary:hover {
+      background: #205949;
+      border-color: var(--accent);
+    }
+
+    /* Calibration Guide Panel */
+    .guide-card {
+      grid-column: 1 / -1;
+      background: #0e1a24;
+      border: 1px solid #263e52;
+      border-radius: 14px;
+      padding: 20px;
+    }
+    .guide-title {
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: var(--accent);
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .guide-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.83rem;
+      margin-top: 8px;
+    }
+    .guide-table th, .guide-table td {
+      padding: 9px 12px;
+      text-align: left;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+    }
+    .guide-table th {
+      background: rgba(0,0,0,0.25);
+      color: var(--muted);
+      font-size: 0.76rem;
+      text-transform: uppercase;
+    }
+    .code-tag {
+      background: #060c12;
+      border: 1px solid #223748;
+      border-radius: 4px;
+      padding: 2px 6px;
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+      color: #9de2ff;
+      font-size: 0.8rem;
+    }
+    .val-tag {
+      color: #ffaa44;
+      font-weight: 600;
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <div class="brand-mark"></div>
+      <div>
+        <h1>RoboMaster EP — Sensor Test & Calibration</h1>
+        <p class="subtitle">ระบบทดสอบและสอบเทียบเซนเซอร์สด · หุ่นยนต์ไม่เคลื่อนที่ (ขยับมือ)</p>
+      </div>
+    </div>
+    <div class="status-badge" id="conn-badge">
+      <span class="status-dot"></span>
+      <span id="conn-text">เชื่อมต่อหุ่นยนต์แล้ว</span>
+    </div>
+  </header>
+
+  <main class="layout">
+    <!-- LEFT COLUMN: Camera & Visual Detection -->
+    <div class="col">
+      <section class="card">
+        <div class="card-head">
+          <div class="card-title">
+            <span>📷</span> กล้อง & การตรวจจับป้าย (Camera & Target Vision)
+          </div>
+          <span class="subtitle">สตรีมสด 20 FPS · Crosshair กลางภาพ</span>
+        </div>
+        <div class="card-body">
+          <div class="camera-wrap">
+            <img src="/video" id="video-stream" alt="Camera Stream">
+            <div class="cam-overlay-tag" id="cam-status">Active Stream</div>
+            <div class="cam-fps-tag" id="cam-fps">20 FPS</div>
+            <div class="crosshair">
+              <div class="crosshair-center"></div>
+            </div>
+          </div>
+
+          <div style="margin-top: 14px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 6px;">
+              <span style="font-size:0.85rem; font-weight:600; color:#d6e8f0;">ป้ายที่ตรวจจับได้ในภาพ (Detected Targets)</span>
+              <span style="font-size:0.78rem; color:var(--muted);" id="targets-count">พบ 0 ป้าย</span>
+            </div>
+            <table class="targets-table">
+              <thead>
+                <tr>
+                  <th>สี (Color)</th>
+                  <th>รูปทรง (Shape)</th>
+                  <th>กึ่งกลาง (Center)</th>
+                  <th>ระยะคลาดกึ่งกลาง</th>
+                  <th>พื้นที่ (Area)</th>
+                </tr>
+              </thead>
+              <tbody id="targets-body">
+                <tr><td colspan="5" style="text-align:center; color:var(--muted); padding:16px;">ยังไม่พบป้ายสีในมุมกล้อง</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ODOMETRY & IMU (HAND MOTION) -->
+      <section class="card">
+        <div class="card-head">
+          <div class="card-title">
+            <span>📐</span> พิกัดและองศาการขยับด้วยมือ (Hand Odometry & Attitude)
+          </div>
+          <button class="btn btn-primary" id="btn-reset-odo">🔄 รีเซ็ตศูนย์ X, Y (Zero)</button>
+        </div>
+        <div class="card-body">
+          <div class="controls-grid">
+            <div class="stat-box">
+              <div class="stat-label">ระยะ X (เดินหน้า / ถอยหลัง)</div>
+              <div class="stat-value" id="odo-x">0.000 <span style="font-size:0.85rem; color:var(--muted);">m</span></div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-label">ระยะ Y (สไลด์ซ้าย / ขวา)</div>
+              <div class="stat-value" id="odo-y">0.000 <span style="font-size:0.85rem; color:var(--muted);">m</span></div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-label">มุมหันตัวรถ (Chassis Yaw)</div>
+              <div class="stat-value" id="imu-yaw">0.0 <span style="font-size:0.85rem; color:var(--muted);">°</span></div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-label">มุมเอียง (Pitch / Roll)</div>
+              <div class="stat-value" id="imu-pitch-roll">0.0° / 0.0°</div>
+            </div>
+          </div>
+          <p style="font-size:0.75rem; color:var(--muted); margin-top:10px;">
+            💡 <strong>วิธีทดสอบ:</strong> นำหุ่นวางที่ขอบกระเบื้อง กด "รีเซ็ตศูนย์ X,Y" แล้วลองใช้มือเข็นหุ่นไปข้างหน้า 1 ช่อง (0.60 m) เพื่อตรวจว่าตัวเลขขึ้นตรง 0.60 m หรือไม่
+          </p>
+        </div>
+      </section>
+    </div>
+
+    <!-- RIGHT COLUMN: Distance (ToF) & IR Bumpers -->
+    <div class="col">
+      <!-- TOF SENSOR -->
+      <section class="card">
+        <div class="card-head">
+          <div class="card-title">
+            <span>📏</span> เซนเซอร์วัดระยะ ToF (Distance Sensor)
+          </div>
+          <span class="subtitle">Sub-distance CH 0</span>
+        </div>
+        <div class="card-body">
+          <div class="tof-hero">
+            <div>
+              <span class="tof-big-value" id="tof-main-mm">—</span><span class="tof-unit">mm</span>
+              <span class="tof-cm" id="tof-main-cm">(— cm)</span>
+            </div>
+            <div class="state-badge badge-open" id="tof-status-badge">กำลังอ่านค่า...</div>
+          </div>
+
+          <!-- Gauge Range Bar -->
+          <div class="gauge-wrap">
+            <div class="gauge-bar-bg" id="gauge-bar">
+              <div class="zone-emergency" id="zone-emg" style="width: 25%;"></div>
+              <div class="zone-wall" id="zone-wall" style="left: 25%; width: 25%;"></div>
+              <div class="zone-open" id="zone-open" style="left: 50%; width: 50%;"></div>
+              <div class="gauge-needle" id="gauge-needle" style="left: 0%;"></div>
+            </div>
+            <div class="gauge-labels">
+              <span>0 cm</span>
+              <span style="color:var(--red);">🛑 25 cm (หยุดฉุกเฉิน)</span>
+              <span style="color:var(--amber);">🧱 28-50 cm (กำแพง)</span>
+              <span style="color:var(--accent);">🟢 > 50 cm (ทางเปิด)</span>
+              <span>100+ cm</span>
+            </div>
+          </div>
+
+          <!-- ToF All Channels -->
+          <div class="channels-grid">
+            <div class="channel-box active">
+              <div class="channel-title">CH 0 (หลัก)</div>
+              <div class="channel-val" id="tof-ch0">—</div>
+            </div>
+            <div class="channel-box">
+              <div class="channel-title">CH 1</div>
+              <div class="channel-val" id="tof-ch1">—</div>
+            </div>
+            <div class="channel-box">
+              <div class="channel-title">CH 2</div>
+              <div class="channel-val" id="tof-ch2">—</div>
+            </div>
+            <div class="channel-box">
+              <div class="channel-title">CH 3</div>
+              <div class="channel-val" id="tof-ch3">—</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- IR SENSORS (BUMPERS) -->
+      <section class="card">
+        <div class="card-head">
+          <div class="card-title">
+            <span>🚨</span> เซนเซอร์กันชนอินฟราเรด (IR Obstacle Bumpers)
+          </div>
+          <span class="subtitle">Sensor Adapter IO / ADC</span>
+        </div>
+        <div class="card-body">
+          <!-- FRONT IR -->
+          <div class="bumper-group">
+            <div class="bumper-header">🛡️ กันชนหน้า (Front IR Bumper)</div>
+            <div class="ir-grid">
+              <div class="ir-card clear" id="front-left-card">
+                <div class="ir-top-row">
+                  <span class="ir-name">หน้าซ้าย (Front-L)</span>
+                  <span class="ir-indicator clear" id="front-left-badge">โล่ง (CLEAR)</span>
+                </div>
+                <div class="ir-details">
+                  <div>IO: <span class="ir-detail-val" id="front-left-io">—</span></div>
+                  <div>Active: <span class="ir-detail-val" id="front-left-act">0</span></div>
+                  <div>ADC: <span class="ir-detail-val" id="front-left-adc">—</span></div>
+                  <div style="grid-column: 1 / -1; font-size:0.7rem;">พอร์ต: ID 4 Port 2 (io_8)</div>
+                </div>
+              </div>
+
+              <div class="ir-card clear" id="front-right-card">
+                <div class="ir-top-row">
+                  <span class="ir-name">หน้าขวา (Front-R)</span>
+                  <span class="ir-indicator clear" id="front-right-badge">โล่ง (CLEAR)</span>
+                </div>
+                <div class="ir-details">
+                  <div>IO: <span class="ir-detail-val" id="front-right-io">—</span></div>
+                  <div>Active: <span class="ir-detail-val" id="front-right-act">1</span></div>
+                  <div>ADC: <span class="ir-detail-val" id="front-right-adc">—</span></div>
+                  <div style="grid-column: 1 / -1; font-size:0.7rem;">พอร์ต: ID 1 Port 1 (io_1)</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- REAR IR -->
+          <div class="bumper-group">
+            <div class="bumper-header">🛡️ กันชนหลัง (Rear IR Bumper)</div>
+            <div class="ir-grid">
+              <div class="ir-card clear" id="rear-left-card">
+                <div class="ir-top-row">
+                  <span class="ir-name">หลังซ้าย (Rear-L)</span>
+                  <span class="ir-indicator clear" id="rear-left-badge">โล่ง (CLEAR)</span>
+                </div>
+                <div class="ir-details">
+                  <div>IO: <span class="ir-detail-val" id="rear-left-io">—</span></div>
+                  <div>Active: <span class="ir-detail-val" id="rear-left-act">0</span></div>
+                  <div>ADC: <span class="ir-detail-val" id="rear-left-adc">—</span></div>
+                  <div style="grid-column: 1 / -1; font-size:0.7rem;">พอร์ต: ID 4 Port 1 (io_7)</div>
+                </div>
+              </div>
+
+              <div class="ir-card clear" id="rear-right-card">
+                <div class="ir-top-row">
+                  <span class="ir-name">หลังขวา (Rear-R)</span>
+                  <span class="ir-indicator clear" id="rear-right-badge">โล่ง (CLEAR)</span>
+                </div>
+                <div class="ir-details">
+                  <div>IO: <span class="ir-detail-val" id="rear-right-io">—</span></div>
+                  <div>Active: <span class="ir-detail-val" id="rear-right-act">1</span></div>
+                  <div>ADC: <span class="ir-detail-val" id="rear-right-adc">—</span></div>
+                  <div style="grid-column: 1 / -1; font-size:0.7rem;">พอร์ต: ID 3 Port 2 (io_6)</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div style="margin-top:12px; font-size:0.76rem; color:var(--muted); background:#0a141d; padding:8px 12px; border-radius:6px;">
+            ⚠️ <strong>การทดสอบ:</strong> ใช้มือหรือกระดาษยื่นเข้าใกล้เซนเซอร์ IR ทีละตัว แล้วดูว่าการ์ดเปลี่ยนเป็นสีแดง <span style="color:var(--red); font-weight:700;">"เจอ (DETECTED)"</span> หรือไม่
+          </div>
+        </div>
+      </section>
+
+      <!-- GIMBAL CONTROLS -->
+      <section class="card">
+        <div class="card-head">
+          <div class="card-title">
+            <span>🎯</span> กิมบอล & สั่งหันหัวทดสอบ (Gimbal Quick-Aim)
+          </div>
+          <span class="subtitle">แบตเตอรี่: <strong id="bat-val">— %</strong></span>
+        </div>
+        <div class="card-body">
+          <div class="controls-grid" style="margin-bottom:12px;">
+            <div class="stat-box">
+              <div class="stat-label">มุมกิมบอล Yaw (เทียบรถ)</div>
+              <div class="stat-value" id="gimbal-yaw">0.0°</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-label">มุมกิมบอล Pitch (ก้ม/เงย)</div>
+              <div class="stat-value" id="gimbal-pitch">0.0°</div>
+            </div>
+          </div>
+
+          <div style="font-size:0.8rem; font-weight:600; color:#d6e8f0; margin-bottom:6px;">
+            🕹️ สั่งหันกิมบอลไป 4 ทิศ (ล้อไม่ขยับ):
+          </div>
+          <div class="btn-group" style="margin-bottom:14px;">
+            <button class="btn" onclick="moveGimbal(0, 0)">🎯 หน้า (0°)</button>
+            <button class="btn" onclick="moveGimbal(0, -90)">⬅️ ซ้าย (-90°)</button>
+            <button class="btn" onclick="moveGimbal(0, 90)">➡️ ขวา (+90°)</button>
+            <button class="btn" onclick="moveGimbal(0, 180)">🔄 หลัง (180°)</button>
+            <button class="btn" onclick="moveGimbal(-20, 0)">📐 ก้มส่องเป้า (-20°)</button>
+            <button class="btn btn-primary" onclick="recenterGimbal()">🔄 ตั้งศูนย์ (Recenter)</button>
+          </div>
+
+          <div style="font-size:0.8rem; font-weight:600; color:#d6e8f0; margin-bottom:6px;">
+            🔓 ควบคุมการล็อคหุ่นยนต์ & กิมบอล (Robot & Gimbal Unlock):
+          </div>
+          <div class="btn-group">
+            <button class="btn btn-primary" onclick="unlockRobot()">🔓 ปลดล็อคโหมดอิสระ (FREE Mode)</button>
+            <button class="btn" onclick="suspendGimbal()">💤 พักมอเตอร์กิมบอล (Gimbal Sleep - หันมือได้)</button>
+            <button class="btn" onclick="resumeGimbal()">⚡ เปิดมอเตอร์กิมบอล (Gimbal Resume)</button>
+          </div>
+          <div style="margin-top:10px; font-size:0.75rem; color:var(--accent); background:#0c221d; padding:8px 12px; border-radius:6px; border:1px solid #1a4f40;">
+            ✨ <strong>โหมดอิสระ (FREE Mode):</strong> ล้อรถไม่ล็อค มอเตอร์ไม่ต้าน สามารถใช้มือหมุนตัวรถเปลี่ยนทิศทางและเข็นได้อย่างอิสระ
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- CALIBRATION GUIDE TABLE (WHERE TO EDIT CONFIG) -->
+    <section class="guide-card">
+      <div class="guide-title">
+        <span>⚙️</span> คู่มือการปรับค่าจริงในไฟล์ตั้งค่า (Where to Adjust in <code>config/settings.yaml</code>)
+      </div>
+      <p style="font-size:0.82rem; color:var(--muted); margin-bottom:12px;">
+        เมื่อท่านวัดระยะ ToF จริง หรือตรวจสอบ IO ของ IR เซนเซอร์ได้แล้ว ให้นำค่าที่ได้ไปแก้ไขในไฟล์ <code class="code-tag">Final_Assignment/config/settings.yaml</code> ตามตารางนี้:
+      </p>
+
+      <table class="guide-table">
+        <thead>
+          <tr>
+            <th>เซนเซอร์</th>
+            <th>หัวข้อ / Key ใน settings.yaml</th>
+            <th>ค่าปัจจุบัน</th>
+            <th>คำอธิบายและการปรับแต่ง</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>ToF (ระยะกำแพง)</strong></td>
+            <td><code class="code-tag">exploration.wall_threshold_mm</code></td>
+            <td><span class="val-tag" id="cfg-wall-thresh">500</span> mm</td>
+            <td>ถ้าระยะ ToF น้อยกว่าหรือเท่ากับค่านี้จะนับเป็น <strong>"กำแพง"</strong> (มากกว่านี้นับเป็นทางเปิด). ปรับเพิ่ม/ลดตามขนาดช่องเดิน</td>
+          </tr>
+          <tr>
+            <td><strong>ToF (หยุดฉุกเฉิน)</strong></td>
+            <td><code class="code-tag">exploration.emergency_stop_distance_m</code></td>
+            <td><span class="val-tag" id="cfg-emg-stop">0.25</span> m (25 cm)</td>
+            <td>ระยะระหว่างตัวหุ่นกับกำแพงด้านหน้า หาก ToF ต่ำกว่านี้รถจะเบรกฉุกเฉินทันที</td>
+          </tr>
+          <tr>
+            <td><strong>ToF (จัดกลางช่อง)</strong></td>
+            <td><code class="code-tag">exploration.alignment.wall_distance_m</code></td>
+            <td><span class="val-tag" id="cfg-align-dist">0.28</span> m (28 cm)</td>
+            <td>ระยะอ้างอิงเป้าหมายที่รถพยายามรักษาระยะห่างจากกำแพงเวลาจัดตัวให้อยู่กึ่งกลางช่อง</td>
+          </tr>
+          <tr>
+            <td><strong>ToF (หัววัดถึงแกน)</strong></td>
+            <td><code class="code-tag">exploration.sensor.offset_from_yaw_axis_m</code></td>
+            <td><span class="val-tag">0.075</span> m (7.5 cm)</td>
+            <td>ระยะจริงจากจุดหมุนกิมบอลถึงเลนส์ ToF</td>
+          </tr>
+          <tr>
+            <td><strong>IR กันชนหน้า</strong></td>
+            <td><code class="code-tag">front_ir.left.active_io</code> / <code class="code-tag">front_ir.right.active_io</code></td>
+            <td><span class="val-tag">L: 0, R: 1</span></td>
+            <td>ขั้วสัญญาณเมื่อมีวัตถุมาบัง (Active Polarity). ถ้าเอามือบังแล้ว IO กลายเป็น 0 ให้ใส่ 0, ถ้ากลายเป็น 1 ให้ใส่ 1</td>
+          </tr>
+          <tr>
+            <td><strong>IR กันชนหลัง</strong></td>
+            <td><code class="code-tag">rear_ir.left.active_io</code> / <code class="code-tag">rear_ir.right.active_io</code></td>
+            <td><span class="val-tag">L: 0, R: 1</span></td>
+            <td>ขั้วสัญญาณ Active Polarity ของกันชนหลัง</td>
+          </tr>
+          <tr>
+            <td><strong>กล้อง (มุมก้มส่องเป้า)</strong></td>
+            <td><code class="code-tag">target_inspection.pitch_deg</code></td>
+            <td><span class="val-tag">-20.0</span> °</td>
+            <td>มุมก้มของกิมบอลเวลาเล็งป้ายระดับต่ำบนผนัง</td>
+          </tr>
+          <tr>
+            <td><strong>กล้อง (ช่วงสี HSV)</strong></td>
+            <td><code class="code-tag">color_ranges.red / green / yellow / blue</code></td>
+            <td><span class="val-tag">[[H,S,V], [H,S,V]]</span></td>
+            <td>ช่วงสีสำหรับคัดกรองป้าย หากสภาพแสงในสนามทำให้ตรวจไม่ติด ให้ขยายช่วง H หรือ S/V</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+  </main>
+
+  <script>
+    let zeroX = 0;
+    let zeroY = 0;
+    let rawX = 0;
+    let rawY = 0;
+
+    // Reset Odometry Zero
+    document.getElementById("btn-reset-odo").addEventListener("click", () => {
+      zeroX = rawX;
+      zeroY = rawY;
+      updateOdometryDisplay();
+    });
+
+    function updateOdometryDisplay() {
+      const relX = rawX - zeroX;
+      const relY = rawY - zeroY;
+      document.getElementById("odo-x").innerHTML = `${relX >= 0 ? "+" : ""}${relX.toFixed(3)} <span style="font-size:0.85rem; color:var(--muted);">m</span>`;
+      document.getElementById("odo-y").innerHTML = `${relY >= 0 ? "+" : ""}${relY.toFixed(3)} <span style="font-size:0.85rem; color:var(--muted);">m</span>`;
+    }
+
+    async function moveGimbal(pitch, yaw) {
+      try {
+        await fetch("/api/gimbal/move", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ pitch, yaw })
+        });
+      } catch (err) {
+        console.error("Gimbal move error:", err);
+      }
+    }
+
+    async function recenterGimbal() {
+      try {
+        await fetch("/api/gimbal/recenter", { method: "POST" });
+      } catch (err) {
+        console.error("Gimbal recenter error:", err);
+      }
+    }
+
+    async function unlockRobot() {
+      try {
+        await fetch("/api/robot/unlock", { method: "POST" });
+        alert("ปลดล็อคตัวรถสำเร็จ (โหมดอิสระ FREE Mode เปิดใช้งานแล้ว หมุนตัวรถได้อิสระ)");
+      } catch (err) {
+        console.error("Robot unlock error:", err);
+      }
+    }
+
+    async function suspendGimbal() {
+      try {
+        await fetch("/api/gimbal/suspend", { method: "POST" });
+      } catch (err) {
+        console.error("Gimbal suspend error:", err);
+      }
+    }
+
+    async function resumeGimbal() {
+      try {
+        await fetch("/api/gimbal/resume", { method: "POST" });
+      } catch (err) {
+        console.error("Gimbal resume error:", err);
+      }
+    }
+
+    // Main telemetry poll loop
+    async function pollSensors() {
+      try {
+        const res = await fetch("/api/sensors", { cache: "no-store" });
+        if (!res.ok) throw new Error("HTTP error " + res.status);
+        const data = await res.json();
+
+        // Connection
+        document.getElementById("conn-badge").className = "status-badge";
+        document.getElementById("conn-text").textContent = "เชื่อมต่อหุ่นยนต์แล้ว";
+
+        // ToF Sensor
+        const tofMm = data.tof.distance_mm;
+        const tofEl = document.getElementById("tof-main-mm");
+        const tofCmEl = document.getElementById("tof-main-cm");
+        const badgeEl = document.getElementById("tof-status-badge");
+        const needle = document.getElementById("gauge-needle");
+
+        if (tofMm != null && tofMm > 0) {
+          tofEl.textContent = Math.round(tofMm);
+          tofCmEl.textContent = `(${(tofMm / 10).toFixed(1)} cm)`;
+
+          // Needle position: 0mm to 1000mm mapped to 0% - 100%
+          const pct = Math.max(0, Math.min(100, (tofMm / 1000) * 100));
+          needle.style.left = `${pct}%`;
+
+          // Classification
+          if (tofMm <= data.tof.emergency_stop_distance_mm) {
+            badgeEl.className = "state-badge badge-emergency";
+            badgeEl.textContent = "🛑 เขตหยุดฉุกเฉิน (EMERGENCY)";
+          } else if (tofMm <= data.tof.wall_threshold_mm) {
+            badgeEl.className = "state-badge badge-wall";
+            badgeEl.textContent = "🧱 ตรวจพบกำแพง (WALL)";
+          } else {
+            badgeEl.className = "state-badge badge-open";
+            badgeEl.textContent = "🟢 ทางเปิด (OPEN PATH)";
+          }
+        } else {
+          tofEl.textContent = "—";
+          tofCmEl.textContent = "(— cm)";
+          badgeEl.className = "state-badge badge-open";
+          badgeEl.textContent = "ไม่มีสิ่งกีดขวาง / เกินระยะ";
+          needle.style.left = "100%";
+        }
+
+        // ToF Channels
+        if (data.tof.channels) {
+          document.getElementById("tof-ch0").textContent = data.tof.channels[0] != null ? `${data.tof.channels[0]} mm` : "—";
+          document.getElementById("tof-ch1").textContent = data.tof.channels[1] != null ? `${data.tof.channels[1]} mm` : "—";
+          document.getElementById("tof-ch2").textContent = data.tof.channels[2] != null ? `${data.tof.channels[2]} mm` : "—";
+          document.getElementById("tof-ch3").textContent = data.tof.channels[3] != null ? `${data.tof.channels[3]} mm` : "—";
+        }
+
+        // IR Sensors Helper
+        function updateIrUI(prefix, irData) {
+          const card = document.getElementById(`${prefix}-card`);
+          const badge = document.getElementById(`${prefix}-badge`);
+          const ioEl = document.getElementById(`${prefix}-io`);
+          const actEl = document.getElementById(`${prefix}-act`);
+          const adcEl = document.getElementById(`${prefix}-adc`);
+
+          if (!irData) return;
+          ioEl.textContent = irData.io != null ? irData.io : "—";
+          actEl.textContent = irData.active_io != null ? irData.active_io : "—";
+          adcEl.textContent = irData.adc != null ? irData.adc : "—";
+
+          if (irData.detected === true) {
+            card.className = "ir-card detected";
+            badge.className = "ir-indicator detected";
+            badge.textContent = "🚨 เจอ (DETECTED)";
+          } else {
+            card.className = "ir-card clear";
+            badge.className = "ir-indicator clear";
+            badge.textContent = "โล่ง (CLEAR)";
+          }
+        }
+
+        updateIrUI("front-left", data.ir.front.left);
+        updateIrUI("front-right", data.ir.front.right);
+        updateIrUI("rear-left", data.ir.rear.left);
+        updateIrUI("rear-right", data.ir.rear.right);
+
+        // Gimbal & Battery
+        document.getElementById("gimbal-yaw").textContent = `${data.gimbal.yaw_chassis_deg.toFixed(1)}°`;
+        document.getElementById("gimbal-pitch").textContent = `${data.gimbal.pitch_chassis_deg.toFixed(1)}°`;
+        document.getElementById("bat-val").textContent = `${data.battery.percent} %`;
+
+        // Odometry & IMU
+        rawX = data.odometry.x_m || 0;
+        rawY = data.odometry.y_m || 0;
+        updateOdometryDisplay();
+        document.getElementById("imu-yaw").textContent = `${data.odometry.yaw_deg.toFixed(1)}°`;
+        document.getElementById("imu-pitch-roll").textContent = `${data.odometry.pitch_deg.toFixed(1)}° / ${data.odometry.roll_deg.toFixed(1)}°`;
+
+        // Camera Targets
+        document.getElementById("cam-fps").textContent = `${data.camera.fps || 20} FPS`;
+        const targetsCount = data.camera.targets ? data.camera.targets.length : 0;
+        document.getElementById("targets-count").textContent = `พบ ${targetsCount} ป้าย`;
+        const tbody = document.getElementById("targets-body");
+        if (targetsCount > 0) {
+          tbody.innerHTML = data.camera.targets.map(t => `
+            <tr>
+              <td><span class="color-pill color-${t.color}">${t.color}</span></td>
+              <td><strong>${t.shape}</strong></td>
+              <td>[${t.center[0]}, ${t.center[1]}]</td>
+              <td>ΔX: ${t.offset_x_norm >= 0 ? "+" : ""}${t.offset_x_norm.toFixed(2)}, ΔY: ${t.offset_y_norm >= 0 ? "+" : ""}${t.offset_y_norm.toFixed(2)}</td>
+              <td>${Math.round(t.area_px2)} px² (${(t.area_fraction * 100).toFixed(1)}%)</td>
+            </tr>
+          `).join("");
+        } else {
+          tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; color:var(--muted); padding:12px;">ยังไม่พบป้ายสีในมุมกล้อง</td></tr>';
+        }
+
+        // Config references in guide
+        if (data.config_refs) {
+          document.getElementById("cfg-wall-thresh").textContent = data.config_refs.wall_threshold_mm;
+          document.getElementById("cfg-emg-stop").textContent = data.config_refs.emergency_stop_distance_m;
+          document.getElementById("cfg-align-dist").textContent = data.config_refs.alignment_wall_distance_m;
+        }
+
+      } catch (err) {
+        document.getElementById("conn-badge").className = "status-badge disconnected";
+        document.getElementById("conn-text").textContent = "ขาดการเชื่อมต่อ";
+      }
+    }
+
+    setInterval(pollSensors, 100); // 10 Hz refresh
+    pollSensors();
+  </script>
+</body>
+</html>
