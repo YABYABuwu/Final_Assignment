@@ -37,7 +37,7 @@ def main():
     parser.add_argument("--targets", default=None, type=parse_targets_arg,
                         help="List of target cell coordinates, e.g. '[(3,2), (2,1)]'. If omitted, automatically loaded from Round 1.")
     parser.add_argument("--targets-file", default="data/targets.json", help="Path to dedicated targets JSON file if separate from map")
-    parser.add_argument("--max-distance", type=int, default=2, help="Max shooting distance in tiles (<= 2)")
+    parser.add_argument("--max-distance", type=int, default=1, help="Max shooting distance in tiles (<= 2, default 1 for reliable camera visibility)")
     parser.add_argument("--allow-same-cell", action="store_true", default=True,
                         help="Allow shooting from the same tile as the target (distance 0, default True)")
     parser.add_argument("--no-allow-same-cell", action="store_false", dest="allow_same_cell",
@@ -291,8 +291,11 @@ def main():
         init_pose = chassis.get_pose()
         robot_origin_x = float(init_pose[0]) if init_pose else 0.0
         robot_origin_y = float(init_pose[1]) if init_pose else 0.0
-
-        body_yaw = 0.0  # heading held throughout (yaw=None in move_to latches to initial heading)
+        # Read actual chassis heading at startup — must not default to 0.0 because
+        # the map base_pose yaw (~97°) means the grid axes are rotated relative to
+        # the robot's odometry frame. Using 0.0 causes every gimbal angle to be
+        # off by ~97°, making T1/T3 miss and T2 accidentally hit the wrong target.
+        body_yaw = float(init_pose[2]) if init_pose and len(init_pose) >= 3 else 0.0
         for step_idx, cell in enumerate(plan["full_path"]):
             world_x, world_y = plan["waypoints"][step_idx]
             # Map waypoints relative to the starting cell position on the floor

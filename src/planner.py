@@ -416,6 +416,11 @@ class MultiTargetPlanner:
                             valid_combo = False
                             break
                         current_cost += len(path) - 1
+                        # Small fractional penalty for shooting distance: prefer standpoints
+                        # closer to the target wall (distance 0 < 1 < 2). This breaks ties
+                        # so a 1-step walk to a 1-tile standpoint is preferred over staying
+                        # at a 2-tile standpoint for free, ensuring the camera can see the target.
+                        current_cost += sp_info["distance_cells"] * 0.1
                         current_pos = sp_info["standpoint"]
                     if not valid_combo:
                         continue
@@ -464,10 +469,12 @@ class MultiTargetPlanner:
                     for cand in remaining:
                         for sp_info in target_candidates[cand["id"]]:
                             p = get_cached_path(current_pos, sp_info["standpoint"])
-                            if p is not None and (len(p) - 1) < best_next_cost:
-                                best_next_cost = len(p) - 1
-                                best_next = cand
-                                best_next_sp = sp_info
+                            if p is not None:
+                                cost = (len(p) - 1) + sp_info["distance_cells"] * 0.1
+                                if cost < best_next_cost:
+                                    best_next_cost = cost
+                                    best_next = cand
+                                    best_next_sp = sp_info
                     if best_next is None or best_next_sp is None:
                         valid_tour = False
                         break
