@@ -1,6 +1,7 @@
 """Unit tests for the img_processing package."""
 
 import unittest
+from copy import deepcopy
 import numpy as np
 import cv2
 
@@ -14,6 +15,8 @@ from img_processing.detector import (
     undistort_frame,
 )
 from img_processing.config import COLORS, DEFAULT_DETECTION_CONFIG
+from src.config_loader import load_config
+from src.targets import COLORS as TARGET_COLORS, detect as detect_target
 
 
 class TestImageProcessing(unittest.TestCase):
@@ -29,6 +32,25 @@ class TestImageProcessing(unittest.TestCase):
         hsv_test[:] = (60, 200, 200)
         mask = color_mask(hsv_test, "green")
         self.assertGreater(cv2.countNonZero(mask), 5000)
+
+    def test_shared_hsv_ranges_and_runtime_override(self):
+        settings_ranges = load_config()["color_ranges"]
+        self.assertEqual(TARGET_COLORS, settings_ranges)
+        for color in settings_ranges:
+            self.assertEqual(COLORS[color]["ranges"], settings_ranges[color])
+
+        frame = np.zeros((360, 640, 3), dtype=np.uint8)
+        cv2.rectangle(frame, (240, 100), (400, 260), (0, 0, 255), -1)
+        swapped = deepcopy(settings_ranges)
+        swapped["red"], swapped["green"] = swapped["green"], swapped["red"]
+        self.assertIn(("red", "square"), {(d.color, d.shape) for d in detect_target(frame)})
+        self.assertIn(("green", "square"), {
+            (d.color, d.shape) for d in detect_target(frame, color_ranges=swapped)})
+        self.assertIn(("green", "square"), {
+            (d.color, d.shape) for d in detect(frame, color_ranges=swapped)[0]})
+        detector = ColorShapeDetector(enable_undistort=False, color_ranges=swapped)
+        self.assertIn(("green", "square"), {
+            (d.color, d.shape) for d in detector.detect(frame)[0]})
 
     def test_ideal_shapes_detection(self):
         # Red circle

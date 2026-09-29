@@ -4,6 +4,7 @@ import json
 from queue import Empty
 import tempfile
 import unittest
+import yaml
 from unittest.mock import patch
 from pathlib import Path
 from types import SimpleNamespace
@@ -43,6 +44,19 @@ class FakeModule:
 
 
 class TemplateTests(unittest.TestCase):
+    def test_color_ranges_reject_invalid_hsv(self):
+        config = load_config()
+        for bad_range in ([[[180, 120, 70], [179, 255, 255]]],
+                          [[[0, True, 70], [10, 255, 255]]],
+                          [[[10, 120, 70], [0, 255, 255]]]):
+            changed = dict(config)
+            changed["color_ranges"] = dict(config["color_ranges"], red=bad_range)
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "settings.yaml"
+                path.write_text(yaml.safe_dump(changed), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "color_ranges.red"):
+                    load_config(path)
+
     def test_config_and_pid(self):
         config = load_config()
         self.assertFalse(config["mission"]["enabled"])
@@ -57,6 +71,8 @@ class TemplateTests(unittest.TestCase):
         self.assertEqual(config["exploration"]["tof_median_window"], 3)
         self.assertIsInstance(config["exploration"]["alignment"]["enabled"], bool)
         self.assertEqual(config["exploration"]["emergency_stop_distance_m"], .20)
+        self.assertNotIn("recovery_max_attempts", config["front_ir"])
+        self.assertNotIn("recovery_max_attempts", config["rear_ir"])
         self.assertNotIn("min_range_m", config["exploration"]["map"])
         self.assertNotIn("max_range_m", config["exploration"]["map"])
 

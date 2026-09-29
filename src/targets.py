@@ -10,14 +10,10 @@ import math
 import cv2
 import numpy as np
 
+from src.config_loader import load_config
 
-COLORS = {
-    "red": (((0, 120, 70), (10, 255, 255)),
-            ((170, 120, 70), (179, 255, 255))),
-    "green": (((36, 80, 20), (95, 255, 255)),),
-    "yellow": (((20, 100, 70), (35, 255, 255)),),
-    "blue": (((96, 80, 40), (135, 255, 255)),),
-}
+
+COLORS = load_config()["color_ranges"]
 SHAPES = ("circle", "square", "horizontal", "vertical")
 
 
@@ -118,17 +114,17 @@ def _shape(contour, min_area):
     return "horizontal" if abs(long_edge[0]) >= abs(long_edge[1]) else "vertical"
 
 
-def detect(frame, min_area_fraction=.02, selected=None):
+def detect(frame, min_area_fraction=.02, selected=None, color_ranges=None):
     """Return accepted targets, largest first; selected is a set of pairs or None."""
     height, width = frame.shape[:2]
     min_area = height * width * min_area_fraction
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
     kernel = np.ones((3, 3), dtype=np.uint8)
     found = []
-    for color, ranges in COLORS.items():
+    for color, ranges in (COLORS if color_ranges is None else color_ranges).items():
         mask = np.zeros((height, width), dtype=np.uint8)
         for lower, upper in ranges:
-            mask |= cv2.inRange(hsv, lower, upper)
+            mask |= cv2.inRange(hsv, tuple(lower), tuple(upper))
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL,
@@ -162,16 +158,17 @@ class Track:
 class TargetTracker:
     """Match contours through adjacent frames and bounded gimbal movements."""
 
-    def __init__(self, min_area_fraction, selected=None):
+    def __init__(self, min_area_fraction, selected=None, color_ranges=None):
         self.min_area_fraction = min_area_fraction
         self.selected = selected
+        self.color_ranges = color_ranges
         self.tracks = {}
         self.next_id = 1
 
     def update(self, frame):
         height, width = frame.shape[:2]
         diagonal = math.hypot(width, height)
-        detections = detect(frame, self.min_area_fraction, self.selected)
+        detections = detect(frame, self.min_area_fraction, self.selected, self.color_ranges)
         pairs = []
         for track_id, track in self.tracks.items():
             for index, item in enumerate(detections):

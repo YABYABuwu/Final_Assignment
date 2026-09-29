@@ -249,6 +249,7 @@ def main():
         dashboard = Dashboard(
             ep_robot, logger, config["dashboard"],
             target_settings=config["exploration"]["target_inspection"],
+            color_ranges=config["color_ranges"],
         )
         dashboard.start()
         host = config["dashboard"]["host"]
@@ -280,6 +281,7 @@ def main():
             fire_type_val,
             on_progress=lambda *args: print(f"  [inspection] {args}"),
             scan_gimbal=gimbal,
+            color_ranges=config["color_ranges"],
         )
 
         start_time = time.time()

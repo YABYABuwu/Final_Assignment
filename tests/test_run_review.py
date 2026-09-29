@@ -161,6 +161,19 @@ class ReviewTests(unittest.TestCase):
             self.assertEqual(messages.count("Rear IR left detected (IO 0)"), 1)
             self.assertIn("Rear IR right recovery cleared (0.040 m)", messages)
 
+    def test_ir_recovery_direction_appears_in_review(self):
+        with tempfile.TemporaryDirectory() as temp:
+            run_dir = Path(temp) / "direction"
+            run_dir.mkdir()
+            (run_dir / "run_summary.json").write_text(json.dumps({
+                "front_ir_recoveries": [{"side": "left", "status": "cleared",
+                                         "direction": "backward", "elapsed_s": 0.5,
+                                         "distance_m": 0.03, "reason": None}],
+            }), encoding="utf-8")
+            issues = RunStore(temp).load_run("direction")["issues"]
+            self.assertIn("Front IR left recovery cleared (0.030 m) via backward",
+                          [issue["message"] for issue in issues])
+
     def test_rear_ir_review_uses_each_sides_polarity(self):
         with tempfile.TemporaryDirectory() as temp:
             run_dir = Path(temp) / "mixed_ir"

@@ -125,9 +125,10 @@ class RunStore:
             for recovery in summary.get(end + "_ir_recoveries", []):
                 issues.append({"level": "warning" if recovery["status"] != "cleared" else "info",
                                "time_s": recovery["elapsed_s"],
-                               "message": "{} IR {} recovery {} ({:.3f} m){}".format(
+                               "message": "{} IR {} recovery {} ({:.3f} m){}{}".format(
                                    end.title(), recovery["side"], recovery["status"],
                                    recovery["distance_m"],
+                                   " via " + recovery["direction"] if recovery.get("direction") else "",
                                    ": " + recovery["reason"] if recovery.get("reason") else "")})
 
         for path in sorted(run_path.glob("*.csv")):

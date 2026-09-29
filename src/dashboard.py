@@ -18,7 +18,7 @@ PAGE = Path(__file__).resolve().parent.parent / "dashboard" / "index.html"
 class Dashboard:
     def __init__(self, robot, logger, settings, slam_map=None, slam_worker=None,
                  explorer=None, motion_settings=None, rear_ir=None, front_ir=None,
-                 target_settings=None):
+                 target_settings=None, color_ranges=None):
         self.camera = robot.camera
         self.logger = logger
         self.settings = settings
@@ -29,6 +29,7 @@ class Dashboard:
         self.rear_ir = rear_ir
         self.front_ir = front_ir
         self.target_settings = target_settings
+        self.color_ranges = color_ranges
         self.running = threading.Event()
         self.frame_changed = threading.Condition()
         self.latest_jpeg = None
@@ -60,7 +61,7 @@ class Dashboard:
                         selected = None if selected == "all" else {
                             tuple(pair.split(":")) for pair in selected}
                         detections = detect(image, self.target_settings["min_area_fraction"],
-                                            selected)
+                                            selected, self.color_ranges)
                         annotated = image.copy()
                         height, width = image.shape[:2]
                         box_colors = {"red": (55, 55, 255), "green": (80, 240, 80),

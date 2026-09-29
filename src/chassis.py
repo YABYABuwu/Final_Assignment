@@ -66,7 +66,8 @@ class ChassisController:
             yaw = angle_error(observed + self.gimbal_heading_offset, 0)
         return position[0], position[1], yaw
 
-    def _recover_from_ir(self, bumper, side, attempt, period, deadline, abort_event, pause_if):
+    def _recover_from_ir(self, bumper, side, attempt, period, deadline, abort_event,
+                         pause_if, movement_axis="longitudinal"):
         """Move away from active IRs for one bounded recovery attempt."""
         settings = bumper.settings
         forward = settings["recovery_speed_m_s"]
@@ -125,6 +126,11 @@ class ChassisController:
                 clear_threshold_mm = settings.get("forward_tof_clear_mm", 250.0)
                 if bumper.end == "rear":
                     if self.front_ir is not None and self.front_ir.blocks_motion(forward, 0, 0):
+                        if self.front_ir.last_block == "waiting_data":
+                            self.stop()
+                            clear_count = 0
+                            time.sleep(period)
+                            continue
                         forward_clear = False
                     elif self.logger is not None:
                         tof_sample = self.logger.get_sample("tof", max_age_s=0.5)
@@ -137,12 +143,21 @@ class ChassisController:
                                 pass
                 else:
                     if self.rear_ir is not None and self.rear_ir.blocks_motion(-forward, 0, 0):
+                        if self.rear_ir.last_block == "waiting_data":
+                            self.stop()
+                            clear_count = 0
+                            time.sleep(period)
+                            continue
                         forward_clear = False
 
                 mode = settings.get("recovery_mode", "diagonal")
                 direction, escape_x, escape_y = recovery_vector(
                     sensors, forward, attempt=attempt, end=bumper.end,
-                    mode=mode, forward_clear=forward_clear)
+                    mode=mode, forward_clear=forward_clear,
+                    movement_axis=movement_axis)
+                if direction == "blocked":
+                    raise MissionStop("{} IR {} has no clear longitudinal escape".format(
+                        bumper.end, side))
                 if direction == "clear":
                     # Hold still while confirming consecutive clear samples.
                     self.stop()
@@ -276,18 +291,12 @@ class ChassisController:
                     bumper = next((item for item in blocked if item.last_block != "waiting_data"), None)
                     if bumper is not None:
                         side = bumper.last_block
-                        if recovery_attempts[bumper.end] >= bumper.settings["recovery_max_attempts"]:
-                            raise MissionStop(
-                                "{} IR {} still blocked after {} recovery attempts".format(
-                                    bumper.end, side, recovery_attempts[bumper.end]))
                         recovery_attempts[bumper.end] += 1
-                        cleared = self._recover_from_ir(
-                            bumper, side, recovery_attempts[bumper.end], period, deadline, abort_event, pause_if)
-                        if (not cleared and recovery_attempts[bumper.end] >=
-                                bumper.settings["recovery_max_attempts"]):
-                            raise MissionStop(
-                                "{} IR {} still blocked after {} recovery attempts".format(
-                                    bumper.end, side, recovery_attempts[bumper.end]))
+                        self._recover_from_ir(
+                            bumper, side, recovery_attempts[bumper.end], period,
+                            deadline, abort_event, pause_if,
+                            movement_axis=("lateral" if abs(vy_robot) > abs(vx_robot)
+                                           else "longitudinal"))
                     for pid in (self.pid_x, self.pid_y, self.pid_yaw):
                         pid.reset()
                     previous = time.monotonic()

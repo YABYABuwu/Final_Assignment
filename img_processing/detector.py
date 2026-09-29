@@ -67,10 +67,12 @@ def undistort_frame(frame: np.ndarray, camera_matrix: Optional[np.ndarray] = Non
     return cv2.undistort(frame, camera_matrix, dist_coeffs)
 
 
-def color_mask(hsv: np.ndarray, color: str, kernel_size: int = 3, iterations: int = 1) -> np.ndarray:
+def color_mask(hsv: np.ndarray, color: str, kernel_size: int = 3, iterations: int = 1,
+               color_ranges: Optional[dict] = None) -> np.ndarray:
     """Build binary mask for target color using HSV ranges and morphology."""
     mask = np.zeros(hsv.shape[:2], dtype=np.uint8)
-    for lower, upper in COLORS[color]["ranges"]:
+    ranges = COLORS[color]["ranges"] if color_ranges is None else color_ranges[color]
+    for lower, upper in ranges:
         mask |= cv2.inRange(hsv, np.array(lower, dtype=np.uint8), np.array(upper, dtype=np.uint8))
     if kernel_size > 0:
         kernel = np.ones((kernel_size, kernel_size), dtype=np.uint8)
@@ -311,6 +313,7 @@ def detect(
     config: Optional[dict] = None,
     undistort: bool = False,
     debug: bool = False,
+    color_ranges: Optional[dict] = None,
 ) -> Tuple[List[Detection], Dict[str, np.ndarray]]:
     """Detect colored shapes in image frame."""
     if config is None:
@@ -327,7 +330,7 @@ def detect(
     iterations = config.get("morph_iterations", 1)
 
     for color_name in COLORS:
-        mask = color_mask(hsv, color_name, kernel_size, iterations)
+        mask = color_mask(hsv, color_name, kernel_size, iterations, color_ranges)
         masks[color_name] = mask
 
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -365,10 +368,12 @@ def detect(
 class ColorShapeDetector:
     """Reusable stateful detector with caching for camera maps."""
 
-    def __init__(self, mode: str = "robust", config: Optional[dict] = None, enable_undistort: bool = True):
+    def __init__(self, mode: str = "robust", config: Optional[dict] = None,
+                 enable_undistort: bool = True, color_ranges: Optional[dict] = None):
         self.mode = mode
         self.config = config or DEFAULT_DETECTION_CONFIG.copy()
         self.enable_undistort = enable_undistort
+        self.color_ranges = color_ranges
         self._map1 = None
         self._map2 = None
         self._last_shape = None
@@ -384,7 +389,9 @@ class ColorShapeDetector:
                 self._last_shape = (w, h)
             proc_frame = cv2.remap(frame, self._map1, self._map2, cv2.INTER_LINEAR)
 
-        detections, masks = detect(proc_frame, mode=self.mode, config=self.config, undistort=False, debug=debug)
+        detections, masks = detect(proc_frame, mode=self.mode, config=self.config,
+                                   undistort=False, debug=debug,
+                                   color_ranges=self.color_ranges)
         return detections, masks, proc_frame
 
     @staticmethod

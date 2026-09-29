@@ -27,7 +27,8 @@ def _nearest_candidate(visible, color, shape, center):
 
 class WallTargetInspector:
     def __init__(self, gimbal, blaster, camera_frames, logger, chassis,
-                 slam_worker, settings, fire_type, on_progress=None, scan_gimbal=None):
+                 slam_worker, settings, fire_type, on_progress=None, scan_gimbal=None,
+                 color_ranges=None):
         self.gimbal = gimbal
         self.scan_gimbal = scan_gimbal if scan_gimbal is not None else gimbal
         self.blaster = blaster
@@ -38,6 +39,7 @@ class WallTargetInspector:
         self.settings = settings
         self.fire_type = fire_type
         self.on_progress = on_progress
+        self.color_ranges = color_ranges
         self.commanded_angles = None
         self.active_cell = None
         self.active_delta = None
@@ -359,7 +361,8 @@ class WallTargetInspector:
             self._progress(cell, delta, "pointing")
             scan_speed = config.get("scan_yaw_speed_deg_s", 50)
             self._point(initial_pitch, inspection_yaw, yaw_speed=scan_speed)
-            tracker = TargetTracker(config["min_area_fraction"], selected)
+            tracker = TargetTracker(config["min_area_fraction"], selected,
+                                    self.color_ranges)
             attempted = []
             confirm_frames = config["confirm_frames"]
             search_frames = config.get("search_frames", confirm_frames + 2)

@@ -30,6 +30,7 @@ class DFSExplorer:
         self.current_cell = (0, 0)
         self.cell_targets = {}
         self.alignments = {}
+        self.travel_heading_deg = None
         self.last_motion_heading = None
         self.last_motion_stop = None
         self.scan_alignment = None
@@ -60,6 +61,7 @@ class DFSExplorer:
                 if self.base_pose is not None else [],
                 "moves": self.moves,
                 "heading_source": self.settings["heading_source"],
+                "travel_heading_deg": self.travel_heading_deg,
                 "gimbal_pitch_frame": "chassis",
                 "alignment_enabled": self.settings["alignment"]["enabled"],
                 "emergency_stop_distance_m": self.settings["emergency_stop_distance_m"],
@@ -140,11 +142,17 @@ class DFSExplorer:
         return self._wait_for_fresh(read_attitude_yaw)
 
     def _drive_holding_current_yaw(self, x, y, kind, stop_if=None):
-        """Capture the live chassis heading immediately before this motion."""
-        yaw = self._current_yaw()
+        """Keep the initial DFS heading while checking fresh yaw before each move."""
+        observed_yaw = self._current_yaw()
         with self.lock:
-            self.last_motion_heading = {"yaw_deg": yaw, "target_m": [x, y],
-                                        "kind": kind, "source": self.settings["heading_source"]}
+            if self.travel_heading_deg is None:
+                self.travel_heading_deg = observed_yaw
+            yaw = self.travel_heading_deg
+            self.last_motion_heading = {
+                "yaw_deg": yaw, "observed_yaw_deg": observed_yaw,
+                "target_m": [x, y], "kind": kind,
+                "source": self.settings["heading_source"],
+            }
         self.map.set_exploration_state(self.snapshot())
         options = {"yaw": yaw, "abort_event": self.slam_worker.abort_event,
                    "disable_timeout": True,
@@ -911,8 +919,10 @@ class DFSExplorer:
             pose = self.map.pose
             if pose is None:
                 raise MissionStop("SLAM has no initial pose")
+            initial_heading = self._current_yaw()
             with self.lock:
                 self.base_pose = tuple(pose)
+                self.travel_heading_deg = initial_heading
                 self.wall_grid.cells.add((0, 0))
                 self.cell_targets[(0, 0)] = tuple(self._motion_pose()[:2])
             root = (0, 0)

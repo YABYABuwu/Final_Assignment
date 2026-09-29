@@ -10,7 +10,8 @@ def adapter_index(sensor_id, port):
     return (sensor_id - 1) * 2 + (port - 1)
 
 
-def recovery_vector(sides, speed, attempt=1, end="rear", mode="staged", forward_clear=True):
+def recovery_vector(sides, speed, attempt=1, end="rear", mode="staged",
+                    forward_clear=True, movement_axis="longitudinal"):
     """Choose a staged escape away from a detected front or rear IR.
 
     Parameters
@@ -24,14 +25,16 @@ def recovery_vector(sides, speed, attempt=1, end="rear", mode="staged", forward_
     end : str, optional
         "rear" or "front".
     mode : str, optional
-        "cardinal" (sideways first, longitudinal second; never diagonal),
+        "cardinal" (choose an escape perpendicular to the current travel axis),
         "diagonal" (moves away longitudinally and laterally simultaneously),
         "forward_first" (longitudinal first if clear, then diagonal),
         or "staged" (legacy: lateral then longitudinal then diagonal).
     forward_clear : bool, optional
         Whether the longitudinal escape direction is clear of obstacles
-        (e.g., front ToF >= threshold when escaping rear obstacle). If False,
-        falls back to pure lateral slide away from the detected side.
+        (e.g., front ToF >= threshold when escaping rear obstacle). A blocked
+        cardinal slide escape returns "blocked"; diagonal modes slide sideways.
+    movement_axis : str, optional
+        "longitudinal" for forward/backward travel or "lateral" for a slide.
     """
     longitudinal = speed if end == "rear" else -speed
     prefix = "front" if end == "rear" else "back"
@@ -43,15 +46,19 @@ def recovery_vector(sides, speed, attempt=1, end="rear", mode="staged", forward_
 
     diag = speed / math.sqrt(2.0)
 
-    # 1. Both sides blocked: escape purely longitudinally
-    if right and left:
+    if mode == "cardinal" and movement_axis == "lateral":
+        if not forward_clear:
+            return "blocked", 0.0, 0.0
         return ("forward" if end == "rear" else "backward"), longitudinal, 0.0
 
-    # 2. Mode: "cardinal". Attempts alternate between a sideways escape
-    # and a longitudinal escape, so the chassis never moves diagonally.
+    # Both sides blocked: escape purely longitudinally
+    if right and left:
+        if mode == "cardinal" and not forward_clear:
+            return "blocked", 0.0, 0.0
+        return ("forward" if end == "rear" else "backward"), longitudinal, 0.0
+
+    # In a forward/backward move, leave a detected side laterally on every attempt.
     if mode == "cardinal":
-        if attempt % 2 == 0 and forward_clear:
-            return ("forward" if end == "rear" else "backward"), longitudinal, 0.0
         if left:
             return "slide_right", 0.0, speed
         return "slide_left", 0.0, -speed
@@ -245,15 +252,16 @@ class IRBumper:
         # obstacle it is already moving away from.  This also keeps an active
         # rear IR from blocking forward travel (and front IR from blocking
         # reverse travel) while the heading PID applies a minor turn.
+        sliding = abs(y) > abs(x)
         away_speed = x if self.end == "rear" else -x
-        if away_speed > 0 and away_speed >= abs(y):
+        if not sliding and away_speed > 0 and away_speed >= abs(y):
             self.last_block = None
             return False
 
         state = self.snapshot()
         toward = x < 0 if self.end == "rear" else x > 0
-        relevant = (("right", toward or y > 0 or z != 0),
-                    ("left", toward or y < 0 or z != 0))
+        relevant = (("right", sliding or toward or y > 0 or z != 0),
+                    ("left", sliding or toward or y < 0 or z != 0))
         detected = [side for side, hazardous in relevant
                     if hazardous and state["sides"][side]["detected"] is True]
         if detected:
@@ -268,10 +276,12 @@ class IRBumper:
 
     def finish_recovery(self, side, status, distance_m, reason=None):
         """Expose the outcome to the live dashboard and saved run summary."""
+        direction = self.recovering
         self.recovering = None
         self.events.append({
             "end": self.end,
             "side": side, "status": status,
+            "direction": direction if direction != side else None,
             "elapsed_s": round(time.time() - self.logger.start_time, 3),
             "distance_m": round(distance_m, 3), "reason": reason,
         })

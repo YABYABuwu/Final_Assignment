@@ -18,6 +18,26 @@ def load_config(path=DEFAULT_CONFIG):
                     "review", "mission", "exploration", "rear_ir", "front_ir"):
         if not isinstance(config.get(section), dict):
             raise ValueError(f"missing config section: {section}")
+    color_ranges = config.get("color_ranges")
+    expected_colors = {"red", "green", "yellow", "blue"}
+    if not isinstance(color_ranges, dict) or set(color_ranges) != expected_colors:
+        raise ValueError("color_ranges must contain red, green, yellow and blue")
+    for color, ranges in color_ranges.items():
+        if not isinstance(ranges, list) or not ranges:
+            raise ValueError(f"color_ranges.{color} must contain at least one HSV range")
+        for index, endpoints in enumerate(ranges):
+            key = f"color_ranges.{color}[{index}]"
+            if not isinstance(endpoints, list) or len(endpoints) != 2:
+                raise ValueError(f"{key} must contain lower and upper HSV triplets")
+            lower, upper = endpoints
+            for triplet in (lower, upper):
+                if (not isinstance(triplet, list) or len(triplet) != 3 or
+                        any(type(value) is not int or value < 0 or
+                            value > (179 if axis == 0 else 255)
+                            for axis, value in enumerate(triplet))):
+                    raise ValueError(f"{key} HSV values must be integers within H 0..179, S/V 0..255")
+            if any(low > high for low, high in zip(lower, upper)):
+                raise ValueError(f"{key} lower HSV values must not exceed upper values")
     if config["connection"].get("type") not in ("ap", "sta", "rndis"):
         raise ValueError("connection.type must be ap, sta or rndis")
 
@@ -163,9 +183,6 @@ def load_config(path=DEFAULT_CONFIG):
         clear_samples = ir.get("recovery_clear_samples")
         if type(clear_samples) is not int or not 1 <= clear_samples <= 20:
             raise ValueError(f"{key}.recovery_clear_samples must be an integer from 1 to 20")
-        max_attempts = ir.get("recovery_max_attempts")
-        if type(max_attempts) is not int or not 1 <= max_attempts <= 5:
-            raise ValueError(f"{key}.recovery_max_attempts must be an integer from 1 to 5")
         mode = ir.get("recovery_mode")
         if mode is not None and mode not in ("cardinal", "diagonal", "forward_first", "staged"):
             raise ValueError(
@@ -313,7 +330,7 @@ def load_config(path=DEFAULT_CONFIG):
     if not isinstance(target, dict) or not isinstance(target.get("enabled"), bool):
         raise ValueError("exploration.target_inspection.enabled must be true or false")
     selected = target.get("selected")
-    colors = {"red", "green", "yellow", "blue"}
+    colors = set(color_ranges)
     shapes = {"circle", "square", "horizontal", "vertical"}
     if selected != "all":
         if (not isinstance(selected, list) or not selected or

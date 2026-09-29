@@ -381,7 +381,7 @@
         const heldHeading=run.summary.exploration?.last_motion_heading;
         if (heldHeading?.yaw_deg != null) {
           const note=document.createElement("p");
-          note.textContent=`Yaw ที่บันทึกก่อนเดินช่วงล่าสุด: ${heldHeading.yaw_deg.toFixed(1)}° (${heldHeading.source === "gimbal" ? "gimbal" : "attitude"}; ${heldHeading.kind === "alignment" ? "จัดกลางช่อง" : "เดินตามกริด"})`;
+          note.textContent=`Yaw เป้าหมายคงที่: ${heldHeading.yaw_deg.toFixed(1)}° (${heldHeading.source === "gimbal" ? "gimbal" : "attitude"}; ${heldHeading.kind === "alignment" ? "จัดกลางช่อง" : "เดินตามกริด"})${heldHeading.observed_yaw_deg == null ? "" : ` · yaw ก่อนเดินช่วงล่าสุด ${heldHeading.observed_yaw_deg.toFixed(1)}°`}`;
           wallPanel.append(note);
         }
         if (Array.isArray(scanned)) {

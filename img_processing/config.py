@@ -2,36 +2,30 @@
 
 import numpy as np
 
-# Color definitions with HSV ranges, display colors, and labels
+from src.config_loader import load_config
+
+# Display metadata; HSV ranges come from the shared settings file.
+_COLOR_RANGES = load_config()["color_ranges"]
 COLORS = {
     "red": {
         "label": "แดง",
         "bgr": (40, 40, 240),
-        "ranges": [
-            ((0, 100, 60), (10, 255, 255)),
-            ((165, 100, 60), (179, 255, 255)),
-        ],
+        "ranges": _COLOR_RANGES["red"],
     },
     "green": {
         "label": "เขียว",
         "bgr": (50, 200, 50),
-        "ranges": [
-            ((35, 70, 25), (92, 255, 255)),
-        ],
+        "ranges": _COLOR_RANGES["green"],
     },
     "yellow": {
         "label": "เหลือง",
         "bgr": (0, 220, 240),
-        "ranges": [
-            ((18, 90, 60), (35, 255, 255)),
-        ],
+        "ranges": _COLOR_RANGES["yellow"],
     },
     "blue": {
         "label": "น้ำเงิน",
         "bgr": (240, 100, 30),
-        "ranges": [
-            ((95, 80, 40), (135, 255, 255)),
-        ],
+        "ranges": _COLOR_RANGES["blue"],
     },
 }
 

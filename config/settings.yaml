@@ -4,7 +4,7 @@ connection:
 
 motion:
   position_tolerance_m: 0.015  # ถือว่าถึงจุดเมื่อห่างไม่เกิน 5 ซม.
-  angle_tolerance_deg: 1      # ยอมให้มุมคลาดเคลื่อนได้ 3 องศา
+  angle_tolerance_deg: 0.5      # ยอมให้มุมคลาดเคลื่อนได้ 3 องศา
   timeout_s: 15               # เวลาสูงสุดต่อ waypoint
   sample_timeout_s: 1.0       # หาก position/attitude เก่ากว่านี้ ให้หยุด
   control_period_s: 0.1       # ระยะเวลาระหว่างคำสั่งความเร็ว
@@ -57,6 +57,19 @@ image_processing:
   morph_kernel_size: 3    # kernel สำหรับ close/open เพื่อลดรอยขาดและ noise
   morph_iterations: 1
 
+# HSV: แต่ละช่วงเป็น [[H ต่ำ, S ต่ำ, V ต่ำ], [H สูง, S สูง, V สูง]]
+# ใช้ร่วมกันทั้งภาพตรวจสดและการค้นหา/เล็งเป้าบนกำแพง; ค่าเริ่มต้นจาก src/targets.py
+color_ranges:
+  red:
+    - [[0, 120, 70], [10, 255, 255]]
+    - [[170, 120, 70], [179, 255, 255]]
+  green:
+    - [[36, 80, 20], [95, 255, 255]]
+  yellow:
+    - [[20, 255, 70], [50, 255, 255]]
+  blue:
+    - [[90, 180, 20], [130, 255, 255]]
+
 review:
   host: 127.0.0.1          # หน้าอ่านข้อมูลย้อนหลัง เปิดเฉพาะคอมเครื่องนี้
   port: 8001               # URL: http://127.0.0.1:8001
@@ -72,11 +85,10 @@ rear_ir:
   calibration_min_consistency: 0.8 # ค่า idle ต้องเหมือนกันอย่างน้อย 80% เพื่อไม่ calibrate จาก noise
   io_read_mode: "direct" # ใช้ get_io(ID, Port) ตลอด Run; ไม่สลับกลับ DDS stream กลางทาง
   max_age_s: 0.5          # ข้อมูลเก่ากว่านี้หยุดการถอย/สไลด์/หมุนจนได้ค่าใหม่
-  recovery_speed_m_s: 0.08 # ครั้ง 1/3 หลบข้าง, ครั้ง 2 เดินหน้า; ทั้งคู่เจอให้เดินหน้า
+  recovery_speed_m_s: 0.08 # ความเร็วหลบ IR
   recovery_max_m: 0.12    # ระยะหลบสูงสุดต่อหนึ่งครั้ง
-  recovery_max_attempts: 3 # ตรวจซ้ำแล้วยังติด ให้ลองหลบได้สูงสุด 3 ครั้งต่อ move_to
   recovery_clear_samples: 3 # ต้องเห็น IO ว่างจาก callback ใหม่ต่อเนื่องก่อนเดินต่อ
-  recovery_mode: "cardinal" # เดินทีละแกนเท่านั้น: ซ้าย/ขวา -> หลบข้าง, ทั้งคู่ -> เดินหน้า
+  recovery_mode: "cardinal" # เดินหน้า/ถอยหลังหลบ IR ซ้าย/ขวาด้วยการสไลด์; ตอนสไลด์เจอ IR หลังให้เดินหน้า
   forward_tof_clear_mm: 250 # ระยะ ToF ด้านหน้าที่ถือว่าโล่งและอนุญาตให้เดินหน้าหลบได้
   direct_io_fallback: true  # หาก DDS ส่ง IO=0 ทุกช่องหลังเปลี่ยนแบต ให้อ่าน ID/Port โดยตรง
   direct_fallback_cache_s: 0.2 # จำกัดความถี่ synchronous SDK read ไม่ให้รบกวน telemetry
@@ -93,9 +105,8 @@ front_ir:
   max_age_s: 0.5
   recovery_speed_m_s: 0.08
   recovery_max_m: 0.12
-  recovery_max_attempts: 3
   recovery_clear_samples: 3
-  recovery_mode: "cardinal" # เดินทีละแกนเท่านั้น: ซ้าย/ขวา -> หลบข้าง, ทั้งคู่ -> ถอยหลัง
+  recovery_mode: "cardinal" # เดินหน้า/ถอยหลังหลบ IR ซ้าย/ขวาด้วยการสไลด์; ตอนสไลด์เจอ IR หน้าให้ถอยหลัง
   direct_io_fallback: true
   direct_fallback_cache_s: 0.2
 
@@ -114,15 +125,15 @@ exploration:
   enabled: true       # เปิดหลังสอบเทียบตำแหน่งแกน yaw/pivot และระยะหัว ToF; true = เริ่ม SLAM + DFS และสั่งรถเดิน
   position_coordinate_system: 1 # ผูกแผนที่กับพิกัดตั้งแต่เปิดหุ่นยนต์ เพื่อให้โหลดแผนที่เดิมได้ในรอบเปิดเครื่องเดียวกัน
   step_m: 0.60            # ขนาดช่องกริดกำแพง และระยะเดินระหว่างศูนย์กลางช่อง
-  max_speed_m_s: 0.20     # จำกัดความเร็วขณะสำรวจแยกจาก mission waypoint
-  heading_source: attitude # ใช้ yaw chassis สำหรับ PID และทิศสแกน; gimbal ground-relative มีความคลาดสะสมใน log 20260927
+  max_speed_m_s: 0.4     # จำกัดความเร็วขณะสำรวจแยกจาก mission waypoint
+  heading_source: attitude # อ่าน yaw จาก chassis ตอนเริ่ม DFS แล้วคงเป้าหมายทิศไว้; gimbal ground-relative เคยมีความคลาดสะสม
   wall_threshold_mm: 500 # ToF <= ค่านี้เป็นกำแพง; มากกว่านี้เป็นทางเปิด
-  tof_median_window: 3   # ใช้ scan ใหม่ 3 ครั้งหลัง gimbal หยุด แล้วเลือกค่ากลางก่อนตัดสินใจ DFS
-  emergency_stop_distance_m: 0.20 # ระยะกึ่งกลาง chassis ถึงกำแพงที่หยุดระหว่างเดินตามกริด
+  tof_median_window: 1   # ใช้ scan ใหม่ 3 ครั้งหลัง gimbal หยุด แล้วเลือกค่ากลางก่อนตัดสินใจ DFS
+  emergency_stop_distance_m: 0.25 # ระยะกึ่งกลาง chassis ถึงกำแพงที่หยุดระหว่างเดินตามกริด
   alignment:
     enabled: true         # จัดตำแหน่งจากกำแพงที่เลือกหลังสแกนครบ 4 ทิศ
     wall_distance_m: 0.28 # เป้าหมายเมื่อมีผนังฝั่งเดียว; สองฝั่งให้ระยะเท่ากัน
-    tolerance_m: 0.03     # ไม่ขยับถ้าคลาดไม่เกิน 3 ซม.
+    tolerance_m: 0.02     # ไม่ขยับถ้าคลาดไม่เกิน 3 ซม.
     max_shift_m: 0.10     # ระยะขยับสูงสุดต่อช่วง; วัดผนังใหม่ก่อนขยับช่วงถัดไป
   max_nodes: 120           # จำกัดจำนวนช่องที่ DFS จะเข้าเยี่ยมต่อรอบ
   update_hz: 5
@@ -137,9 +148,9 @@ exploration:
     yaw_offset_deg: 0.0    # มุมคลาดระหว่างแนวเลนส์กับแนวหน้า gimbal
   gimbal:
     auto_recenter: true     # ตั้งศูนย์กายภาพอัตโนมัติหนึ่งครั้งก่อนเริ่ม DFS
-    recenter_speed_deg_s: 60
+    recenter_speed_deg_s: 180
     pitch_deg: 0.0          # มุมหัวเทียบตัวรถ; ไม่ชดเชย pitch ของ chassis
-    yaw_speed_deg_s: 120
+    yaw_speed_deg_s: 270
     angle_tolerance_deg: 3 # tolerance ของ yaw
     pitch_tolerance_deg: 8 # telemetry เปลี่ยนตาม yaw สูงสุดราว 7.1°; yaw ยังใช้ tolerance 3°
     movement_angle_tolerance_deg: 5 # ขณะรถวิ่งยอมให้กิมบอลคลาดเพิ่มจากแรงสั่น/PID
@@ -156,7 +167,7 @@ exploration:
     reacquire_frames: 6     # จำนวนเฟรมสำหรับหา Color+Shape เดิมก่อนยกเลิกการยิง
     center_radius_fraction: 0.04
     aim_offset_x_fraction: 0.0 # ปรับจุดเล็ง IR เทียบกึ่งกลางภาพหลังทดลองระยะใกล้
-    aim_offset_y_fraction: 0.0
+    aim_offset_y_fraction: 0.20
     max_aim_steps: 12       # จำนวนคำสั่งกิมบอลสูงสุดต่อเป้า ไม่ใช่ timeout
     max_targets_per_wall: 2 # จำนวนเป้าสูงสุดที่ตรวจต่อกำแพงหนึ่งด้าน
     max_step_deg: 4.5       # จำกัดการปรับหัวแต่ละครั้ง ลดลงไม่ให้เป้าหลุดกรอบภาพ

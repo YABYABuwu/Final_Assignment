@@ -412,6 +412,10 @@
       }
       const heldHeading = map.exploration?.last_motion_heading;
       if (heldHeading?.yaw_deg != null) poseText += ` · Yaw เป้าหมายเดินล่าสุด ${number(heldHeading.yaw_deg)}° (${heldHeading.source === "gimbal" ? "gimbal" : "attitude"})`;
+      if (heldHeading?.observed_yaw_deg != null) {
+        const headingError = ((heldHeading.yaw_deg - heldHeading.observed_yaw_deg + 540) % 360) - 180;
+        poseText += ` · ก่อนเดิน ${number(heldHeading.observed_yaw_deg)}° · คลาดจากทิศเริ่ม ${number(headingError)}°`;
+      }
       if (map.exploration?.gimbal_pitch_frame === "chassis") poseText += " · หัวสแกน pitch เทียบรถ";
       document.getElementById("pose").textContent = poseText;
     }

@@ -420,7 +420,7 @@ class ExplorationTests(unittest.TestCase):
         self.assertEqual(chassis.commands[0][:2], (0.0, -.6))
         self.assertEqual(explorer.wall_grid.state((0, 0), (1, 0)), "wall")
 
-    def test_grid_motion_captures_fresh_yaw_for_each_step_and_return(self):
+    def test_grid_motion_holds_initial_heading_across_steps_and_return(self):
         self.settings["heading_source"] = "gimbal"
         class HeadingChassis(SimulatedChassis):
             heading = 12.0
@@ -453,9 +453,11 @@ class ExplorationTests(unittest.TestCase):
         chassis.heading = -7.0
         explorer._move((0, 0))
 
-        self.assertEqual(chassis.commanded_yaws, [12.0, -7.0])
+        self.assertEqual(chassis.commanded_yaws, [12.0, 12.0])
+        self.assertEqual(explorer.snapshot()["travel_heading_deg"], 12.0)
         self.assertEqual(explorer.snapshot()["last_motion_heading"], {
-            "yaw_deg": -7.0, "target_m": [0, 0], "kind": "grid_step",
+            "yaw_deg": 12.0, "observed_yaw_deg": -7.0,
+            "target_m": [0, 0], "kind": "grid_step",
             "source": "gimbal"})
 
     def test_dfs_does_not_move_when_all_sensor_ranges_are_blocked(self):
@@ -826,7 +828,9 @@ class ExplorationTests(unittest.TestCase):
         settings = copy.deepcopy(self.settings)
         settings["alignment"]["enabled"] = False
         settings["max_nodes"] = 2
-        explorer = DFSExplorer(None, None, FakeLogger(), self.make_map(), settings)
+        logger = FakeLogger()
+        logger.set("attitude", (0, 0, 0))
+        explorer = DFSExplorer(None, None, logger, self.make_map(), settings)
         attempts = []
 
         def move(destination):

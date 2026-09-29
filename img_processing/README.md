@@ -3,6 +3,8 @@
 
 โฟลเดอร์นี้ถูกแยกออกมาจาก `ColorLockingLAB` เพื่อใช้สำหรับ **ทดสอบและวินิจฉัยการตรวจจับสีและรูปทรง** โดยเฉพาะ โดยเน้นการ **หมุนกิมบอลด้วยมือเอง (Manual Gimbal)** ไม่มีการหมุนติดตามอัตโนมัติ และไม่มีการยิง
 
+ปรับช่วง HSV ของแต่ละสีที่ `config/settings.yaml` → `color_ranges` เครื่องมือนี้อ่านค่าชุดเดียวกับการตรวจเป้าบนกำแพง และต้องเริ่มโปรแกรมใหม่หลังแก้ค่า
+
 ---
 
 ## 1. วิธีรันโปรแกรม
@@ -108,7 +110,7 @@ py -3.8 -m img_processing.test_cv_window --source ep_ap
 ```text
 img_processing/
 ├── __init__.py           # Package exports
-├── config.py             # ค่าช่วงสี HSV, เกณฑ์การตัดสินรูปทรง, Calibration parameters
+├── config.py             # ชื่อ/สีที่ใช้แสดงผล, เกณฑ์การตัดสินรูปทรง, Calibration parameters
 ├── detector.py           # ตัวตรวจจับสีและรูปทรง (โหมด Robust และ Classic)
 ├── viewer.py             # หน้าเว็บ Web UI แสดงผลสดพร้อมฟังก์ชันปลดกิมบอล
 ├── test_cv_window.py     # หน้าต่าง OpenCV แบบ Standalone
