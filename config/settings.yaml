@@ -195,6 +195,7 @@ exploration:
     movement_alignment_miss_samples: 3 # ต้องคลาดต่อเนื่องหลาย sample ก่อนหยุด mission
   target_inspection:
     enabled: true           # ตรวจทุกขอบที่เป็นกำแพงหนึ่งครั้งขณะ DFS หยุดนิ่ง
+    blind_aim: true         # วิธีที่ 1: เล็งพิกัดเป้าหมายจากเฟรมที่ยืนยันแล้วยิงทันที ไม่รอเช็กภาพซ้ำตอนเงย (แก้ปัญหาปลายกิมบอลบังเป้า)
     pitch_deg: -20.0        # มุมก้มกิมบอล -20.0° เพื่อส่องหาเป้าหมายระดับต่ำบนผนัง
     selected: all           # all หรือรายการ เช่น [red:circle, blue:vertical]
     min_area_fraction: 0.02 # ขั้นต่ำ 2% ของภาพ; 360p ประมาณ 4608 px² มากกว่าเกณฑ์เดิม

@@ -143,7 +143,8 @@ class TargetTests(unittest.TestCase):
         settings["target_inspection"].update({"pitch_deg": -15.0,
                                                "confirm_frames": 3,
                                                "lock_frames": 3,
-                                               "max_targets_per_wall": 1})
+                                               "max_targets_per_wall": 1,
+                                               "blind_aim": False})
         logger = FakeLogger()
         gimbal = FakeGimbal(logger)
         frames = FakeFrames(red_square())
@@ -161,6 +162,20 @@ class TargetTests(unittest.TestCase):
         inspector = WallTargetInspector(gimbal, blaster, frames, logger, chassis,
                                         worker, settings, fire_type="infrared")
         return inspector, gimbal, worker, calls
+
+    def test_blind_aim_fires_directly_without_visual_servo_loop(self):
+        inspector, gimbal, worker, calls = self.make_inspector()
+        inspector.settings["target_inspection"]["blind_aim"] = True
+        inspector.settings["target_inspection"]["aim_offset_x_fraction"] = 0.0
+        inspector.settings["target_inspection"]["aim_offset_y_fraction"] = 0.20
+        result = inspector.inspect((0, 0), (1, 0), 0, 0)
+        self.assertEqual(result["status"], "targets_checked")
+        self.assertEqual(result["targets"][0]["status"], "fire_command_accepted")
+        self.assertEqual(result["targets"][0]["aim_mode"], "blind_aim")
+        self.assertEqual(calls, [{"fire_type": "infrared", "times": 2}])
+        # initial inspection (-15, 0), blind aim (-3.0, 0.0), restore (0.0, 0)
+        self.assertEqual(gimbal.commands, [(-15.0, 0), (-3.0, 0.0), (0.0, 0)])
+        self.assertFalse(worker.paused)
 
     def test_wall_inspection_fires_two_shots_after_lock_and_restores_scan_pitch(self):
         inspector, gimbal, worker, calls = self.make_inspector()

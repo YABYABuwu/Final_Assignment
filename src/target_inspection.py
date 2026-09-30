@@ -267,6 +267,24 @@ class WallTargetInspector:
         target_shape = first_item.shape
         max_lost = config.get("target_lost_frames", 5)
         aim_speed = config.get("aim_yaw_speed_deg_s", 30)
+
+        # Method 1: Lock-on & Blind Aim (Open-loop Fire)
+        # Calculates firing angles directly from confirmed target detection,
+        # points the gimbal, and fires without visual re-verification during/after tilt
+        # (resolves physical occlusion where gimbal tip blocks target upon tilting up).
+        if config.get("blind_aim", False):
+            height, width = first_frame.shape[:2]
+            error_x = first_item.center[0] / width - (.5 + config.get("aim_offset_x_fraction", 0.0))
+            error_y = (.5 + config.get("aim_offset_y_fraction", 0.0)) - first_item.center[1] / height
+            pitch, yaw, _ = self._angles()
+            yaw_step = error_x * config.get("camera_hfov_deg", 90.0)
+            pitch_step = error_y * config.get("camera_vfov_deg", 60.0)
+            target_yaw = round(max(-250.0, min(250.0, yaw + yaw_step)), 2)
+            target_pitch = round(max(-20.0, min(20.0, pitch + pitch_step)), 2)
+            if abs(target_yaw - yaw) >= .1 or abs(target_pitch - pitch) >= .1:
+                self._point(target_pitch, target_yaw, yaw_speed=aim_speed)
+            return self._fire(first_item, first_frame, aim_mode="blind_aim")
+
         while True:
             visible = ({track_id: first_item} if first else tracker.update(frame))
             first = False
