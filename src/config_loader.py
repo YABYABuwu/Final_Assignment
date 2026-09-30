@@ -292,6 +292,9 @@ def load_config(path=DEFAULT_CONFIG):
         raise ValueError("exploration.alignment must be a mapping")
     if not isinstance(alignment.get("enabled"), bool):
         raise ValueError("exploration.alignment.enabled must be true or false")
+    interval_steps = alignment.setdefault("interval_steps", 2)
+    if type(interval_steps) is not int or interval_steps < 1:
+        raise ValueError("exploration.alignment.interval_steps must be a positive integer")
     for name in ("wall_distance_m", "tolerance_m", "max_shift_m"):
         value = alignment.get(name)
         if not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
@@ -317,13 +320,11 @@ def load_config(path=DEFAULT_CONFIG):
     if (type(samples_per_angle) is not int or samples_per_angle < 1 or
             samples_per_angle > 9 or samples_per_angle % 2 != 1):
         raise ValueError("exploration.heading_alignment.samples_per_angle must be an odd integer from 1 to 9")
-    for name in ("min_range_m", "min_span_m", "max_residual_m",
+    for name in ("min_span_m", "max_residual_m",
                  "max_stationary_shift_m"):
         value = heading_alignment.get(name)
         if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
             raise ValueError(f"exploration.heading_alignment.{name} must be positive")
-    if heading_alignment["min_range_m"] * 1000 >= exploration["wall_threshold_mm"]:
-        raise ValueError("exploration.heading_alignment.min_range_m must be below wall_threshold_mm")
     emergency_distance = exploration.get("emergency_stop_distance_m")
     if (type(emergency_distance) not in (int, float) or
             not math.isfinite(emergency_distance) or emergency_distance <= 0):

@@ -150,6 +150,7 @@
         ? `สนาม ${number(slamMap.width*slamMap.resolution_m, 2)} × ${number(slamMap.height*slamMap.resolution_m, 2)} ม. · จุด SDK (0,0) ห่างขอบ −X ${number(-slamMap.origin[0], 2)} ม. / −Y ${number(-slamMap.origin[1], 2)} ม.`
         : "สนาม: รอข้อมูล";
       const wallHeading=slamMap?.exploration?.last_heading_alignment;
+      const appliedHeading=slamMap?.exploration?.last_applied_heading_alignment;
       const headingProgress=slamMap?.exploration?.heading_measurement;
       document.getElementById("heading-alignment").textContent = slamMap?.exploration?.heading_alignment_enabled === false
         ? "จัดมุมจากกำแพง: ปิด"
@@ -158,7 +159,10 @@
         : !wallHeading ? "จัดมุมจากกำแพง: รอวัด"
         : wallHeading.status === "applied"
           ? `จัดมุมจากกำแพงช่อง ${wallHeading.cell.join(",")} ด้าน ${wallHeading.side}: แก้ ${number(wallHeading.correction_deg)}° · bias ${number(wallHeading.heading_bias_deg)}° · จุดกระจาย ${number(wallHeading.span_m*100)} ซม. · คลาดเส้น ${number(wallHeading.residual_m*100)} ซม.`
-          : `จัดมุมจากกำแพงช่อง ${wallHeading.cell.join(",")}: ไม่ใช้ผล (${wallHeading.reason || wallHeading.status})`;
+          : `จัดมุมจากกำแพงช่อง ${wallHeading.cell.join(",")}: ไม่ใช้ผล (${wallHeading.reason || wallHeading.status}`+
+            (wallHeading.rejected_range_mm != null ? `; มุม ${number(wallHeading.rejected_offset_deg)}° วัด ${number(wallHeading.rejected_range_mm, 0)} มม.` : "")+
+            `)`+
+            (appliedHeading ? ` · แก้สำเร็จล่าสุดช่อง ${appliedHeading.cell.join(",")} ${number(appliedHeading.correction_deg)}° · bias ${number(appliedHeading.heading_bias_deg)}°` : "");
       const sensor = slamMap?.sensor_model;
       if (sensor?.type === "single_gimbal_tof") {
         document.getElementById("tof-label").textContent = `ToF #${sensor.tof_channel}`;
@@ -309,7 +313,7 @@
         }).join(" · ");
         const alignment=map.exploration?.alignments?.[grid.current?.join(",")];
         if (alignment) {
-          const distances=Object.entries(alignment.after_m || alignment.walls || {})
+          const distances=Object.entries(alignment.estimated_after_m || alignment.after_m || alignment.walls || {})
             .map(([side,distance]) => `${side} ${(distance*100).toFixed(1)} ซม.`).join(", ");
           const modes=Object.values(alignment.axis_modes || {});
           const targetLabel=modes.includes("between_walls")
@@ -319,14 +323,18 @@
             ? `หยุดฉุกเฉินที่ ${(alignment.emergency_center_distance_m*100).toFixed(1)} ซม.; ถือเป็นกลางช่อง`
             : alignment.status === "retained_ir_lane" ? "คงแนวที่หลบ IR ผ่านแล้ว"
             : alignment.status === "moved" ? `ขยับแล้ว ${alignment.steps ?? 1} ช่วง`
+            : alignment.status === "partial" ? "ขยับถึงระยะสูงสุดต่อรอบ · จะวัดใหม่ในรอบถัดไป"
             : alignment.status === "stalled" ? `ปรับแล้วระยะไม่ดีขึ้น: ${alignment.reason}`
             : alignment.status?.startsWith("skipped_") ? `ข้ามการจัดกลางช่อง: ${alignment.reason}`
             : alignment.status === "no_wall" ? "ไม่พบกำแพง" : "อยู่ในเกณฑ์";
           document.getElementById("cell-sides").textContent +=
             ` · จัดกลางช่อง: ${alignmentStatus}`+
-            (distances ? ` (${distances}; ใช้ ${alignment.selected_sides?.join(", ") || "—"}; ${targetLabel})` : "");
+            (distances ? ` (${alignment.estimated_after_m ? "คาดจาก pose หลังขยับ " : ""}${distances}; ใช้ ${alignment.selected_sides?.join(", ") || "—"}; ${targetLabel})` : "");
         } else if (map.exploration?.alignment_enabled === false)
           document.getElementById("cell-sides").textContent += " · จัดกลางช่อง: ปิด";
+        if (map.exploration?.alignment_interval_steps != null &&
+            (map.exploration.alignment_enabled || map.exploration.heading_alignment_enabled))
+          document.getElementById("cell-sides").textContent += ` · จัดมุม/กลางทุก ${map.exploration.alignment_interval_steps} ก้าวกริด (ล่าสุดก้าว ${map.exploration.last_alignment_move ?? "—"})`;
       } else document.getElementById("cell-sides").textContent="ยังไม่มีกริดกำแพงจากการสแกนครบด้าน";
       const emergencyLimit=map.exploration?.emergency_stop_distance_m;
       if (emergencyLimit != null)
@@ -338,7 +346,8 @@
         const labels={original:"แนวเดิม",candidate:"ทดลองแนวใหม่",reused:"ใช้แนวที่จำไว้",confirmed:"ผ่านแล้วและจำไว้",blocked:"ทางถูกขวาง",aborted:"ยกเลิกการจำ"};
         document.getElementById("cell-sides").textContent +=
           ` · แนว IR ${irLane.cells.map(cell=>cell.join(",")).join(" ↔ ")}: ${labels[irLane.status] || irLane.status}`+
-          ` · เยื้อง X ${(irLane.offset_m[0]*100).toFixed(1)} / Y ${(irLane.offset_m[1]*100).toFixed(1)} ซม. (พิกัดแผนที่)`;
+          ` · เยื้อง X ${(irLane.offset_m[0]*100).toFixed(1)} / Y ${(irLane.offset_m[1]*100).toFixed(1)} ซม. (พิกัดแผนที่)`+
+          (irLane.reason ? ` · ${irLane.reason}` : "");
       }
       if (motionStop?.center_distance_m != null) {
         const stopLabel=motionStop.status === "emergency_stop_centered"
@@ -377,6 +386,12 @@
         ctx.beginPath();
         route.forEach((point, index) => { const p = project(point); if (!index) ctx.moveTo(...p); else ctx.lineTo(...p); });
         ctx.strokeStyle = "#69d9ff"; ctx.lineWidth = 2.4; ctx.stroke();
+      }
+      const plannedRoute = map.exploration?.route_points || [];
+      if (plannedRoute.length > 1) {
+        ctx.beginPath();
+        plannedRoute.forEach((point, index) => { const p = project(point); if (!index) ctx.moveTo(...p); else ctx.lineTo(...p); });
+        ctx.strokeStyle = "#ffd166"; ctx.lineWidth = 3; ctx.stroke();
       }
       for (const point of map.exploration?.visited_points || []) {
         const [x, y] = project(point);
@@ -421,8 +436,10 @@
       const dfsStatus = map.exploration?.status || "แสดงแผนที่";
       const scanProgress = /^scanning_(\d+)_of_(\d+)$/.exec(dfsStatus);
       const backtrackTarget = /^backtracking_to_(-?\d+)_(-?\d+)$/.exec(dfsStatus);
+      const routeTarget = /^routing_to_(-?\d+)_(-?\d+)$/.exec(dfsStatus);
       document.getElementById("dfs-status").textContent = scanProgress ? `สแกน ${scanProgress[1]}/${scanProgress[2]} ทิศ` :
         backtrackTarget ? `กลับช่อง ${backtrackTarget[1]},${backtrackTarget[2]} · ใช้ขอบที่บันทึกไว้` :
+        routeTarget ? `เดินทางลัดไปช่อง ${routeTarget[1]},${routeTarget[2]} · เป้าหมาย ${map.exploration?.route_goal?.join(",") || "—"} · เหลือ ${Math.max(0, (map.exploration?.route?.length || 1)-1)} ช่อง` :
         dfsStatus === "node_limit_reached" ? "สำรวจครบจำนวนกริด · หยุดที่ตำแหน่งปัจจุบัน" :
         dfsStatus === "centering_gimbal" ? "กำลังตั้งศูนย์ gimbal ก่อนเริ่ม DFS" :
         dfsStatus === "recenter_for_heading" ? "กำลังตั้งศูนย์ gimbal ก่อนวัดมุมกำแพง" :
@@ -434,6 +451,8 @@
         dfsStatus === "waiting_slam_scan" ? "รอข้อมูล SLAM ใหม่หลังเดิน" :
         dfsStatus === "inspecting_wall_target" ? "หยุดนิ่ง · ก้มกล้องตรวจเป้าที่กำแพง" :
         dfsStatus === "aligning" ? "จัดตำแหน่งกลางช่องจากกำแพง" : dfsStatus;
+      if (map.exploration?.route_blockages > 0)
+        document.getElementById("dfs-status").textContent += ` · ทางลัดถูกปิดและวางใหม่ ${map.exploration.route_blockages} ครั้ง`;
       document.getElementById("map-message").textContent = map.exploration?.error || `scan ${map.scan_count ?? 0} · match ${map.localization_score ?? "—"}`;
       let poseText = map.pose ? `X ${number(map.pose[0])} · Y ${number(map.pose[1])} · Yaw แผนที่ ${number(map.pose[2])}°` : "รอ pose จาก SLAM";
       if (map.exploration?.heading_source === "gimbal" && latest.gimbal?.length >= 4) {

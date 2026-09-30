@@ -34,11 +34,19 @@ def retarget_lane(lane, normal, index, before, after, settings, contains_world):
         return None
     baseline = lane["anchors_m"][index]
     offset = sum((after[i] - baseline[i]) * normal[i] for i in (0, 1))
-    if (not math.isfinite(offset) or abs(offset) > settings["max_offset_m"] or
-            not all(contains_world(anchor[0] + offset * normal[0],
-                                   anchor[1] + offset * normal[1])
-                    for anchor in lane["anchors_m"])):
-        raise MissionStop("IR lane correction exceeds the local offset or map limit")
+    if not math.isfinite(offset):
+        raise MissionStop("IR lane correction exceeds the local offset or map limit: lateral offset is invalid")
+    if abs(offset) > settings["max_offset_m"]:
+        raise MissionStop(
+            "IR lane correction exceeds the local offset or map limit: "
+            "needs {:.3f} m lateral offset; allowed {:.3f} m on edge {}".format(
+                abs(offset), settings["max_offset_m"], lane["cells"]))
+    if not all(contains_world(anchor[0] + offset * normal[0],
+                              anchor[1] + offset * normal[1])
+               for anchor in lane["anchors_m"]):
+        raise MissionStop(
+            "IR lane correction exceeds the local offset or map limit: "
+            "shifted edge {} would leave the permitted map area".format(lane["cells"]))
     updated = {**lane, "offset_m": [offset * value for value in normal]}
     target = tuple(baseline[i] + updated["offset_m"][i] for i in (0, 1))
     return updated, target

@@ -404,7 +404,12 @@
         }
         if (Array.isArray(scanned)) {
           const note=document.createElement("p");
-          note.textContent=`สแกนสี่ทิศ ${scanned.length} ช่อง · กลับช่องเดิมใช้ขอบที่บันทึกไว้`;
+          note.textContent=`สแกนสี่ทิศ ${scanned.length} ช่อง · กลับช่องเดิมใช้ขอบที่บันทึกไว้และตรวจ ToF สดก่อนเดิน`;
+          wallPanel.append(note);
+        }
+        if (run.summary.exploration?.route_plans != null) {
+          const note=document.createElement("p");
+          note.textContent=`เส้นทางลัดไปจุดสำรวจ/จุดเริ่ม ${run.summary.exploration.route_plans} ครั้ง · ทางเปลี่ยนจนต้องวางใหม่ ${run.summary.exploration.route_blockages || 0} ครั้ง`;
           wallPanel.append(note);
         }
         const alignments=run.summary.exploration?.alignments;
@@ -416,7 +421,7 @@
           note.textContent="จัดมุมจากกำแพง: "+Object.entries(headingAlignments).map(([cell,result])=>
             result.status === "applied"
               ? `${cell} ด้าน ${result.side} แก้ ${result.correction_deg.toFixed(1)}° · bias ${result.heading_bias_deg.toFixed(1)}° · จุดกระจาย ${(result.span_m*100).toFixed(1)} ซม. · คลาดเส้น ${(result.residual_m*100).toFixed(1)} ซม.`
-              : `${cell} ไม่ใช้ผล: ${result.reason || result.status}`
+              : `${cell} ไม่ใช้ผล: ${result.reason || result.status}${result.rejected_range_mm != null ? ` (มุม ${result.rejected_offset_deg}° วัด ${result.rejected_range_mm.toFixed(0)} มม.)` : ""}`
           ).join(" · ");
           wallPanel.append(note);
         }
@@ -429,10 +434,16 @@
         if (run.summary.exploration?.alignment_enabled === false) {
           const note=document.createElement("p"); note.textContent="จัดกลางช่อง: ปิด"; wallPanel.append(note);
         }
+        if (run.summary.exploration?.alignment_interval_steps != null &&
+            (run.summary.exploration.alignment_enabled || run.summary.exploration.heading_alignment_enabled)) {
+          const note=document.createElement("p");
+          note.textContent=`จัดมุม/กลางทุก ${run.summary.exploration.alignment_interval_steps} ก้าวกริด · ล่าสุดที่ก้าว ${run.summary.exploration.last_alignment_move ?? "—"}`;
+          wallPanel.append(note);
+        }
         if (alignments && Object.keys(alignments).length) {
           const note=document.createElement("p");
           note.textContent="จัดกลางช่องจากระยะกึ่งกลางรถถึงกำแพง: "+Object.entries(alignments).map(([cell,result])=>{
-            const distances=Object.entries(result.after_m || result.walls || {})
+            const distances=Object.entries(result.estimated_after_m || result.after_m || result.walls || {})
               .map(([side,distance])=>`${side} ${(distance*100).toFixed(1)} ซม.`).join(", ");
             const modes=Object.values(result.axis_modes || {});
             const method=modes.includes("between_walls")
@@ -442,10 +453,11 @@
               ? `หยุดฉุกเฉินที่ ${(result.emergency_center_distance_m*100).toFixed(1)} ซม. และถือเป็นกลางช่อง`
               : result.status === "retained_ir_lane" ? "คงแนวที่หลบ IR ผ่านแล้ว"
               : result.status === "moved" ? `ขยับแล้ว ${result.steps ?? 1} ช่วง`
+              : result.status === "partial" ? "ขยับถึงระยะสูงสุดต่อรอบ · จะวัดใหม่ในรอบถัดไป"
               : result.status === "stalled" ? `ปรับแล้วระยะไม่ดีขึ้น: ${result.reason}`
               : result.status?.startsWith("skipped_") ? `ข้ามการจัดกลางช่อง: ${result.reason}`
               : result.status === "no_wall" ? "ไม่พบกำแพง" : "อยู่ในเกณฑ์";
-            return `${cell} ${status}${distances ? ` (${distances}; ใช้ ${result.selected_sides?.join(", ") || "—"}; ${method})` : ""}`;
+            return `${cell} ${status}${distances ? ` (${result.estimated_after_m ? "คาดจาก pose หลังขยับ " : ""}${distances}; ใช้ ${result.selected_sides?.join(", ") || "—"}; ${method})` : ""}`;
           }).join(" · ");
           wallPanel.append(note);
         }
@@ -457,7 +469,7 @@
           const labels={original:"แนวเดิม",candidate:"ทดลองแนวใหม่",reused:"ใช้แนวที่จำไว้",confirmed:"ผ่านแล้วและจำไว้",blocked:"ทางถูกขวาง",aborted:"ยกเลิกการจำ"};
           note.textContent="แนว IR ที่ผ่านสำเร็จ (ใช้ซ้ำภายในรันนี้): "+
             (irLanes.map(lane=>`${lane.cells.map(cell=>cell.join(",")).join(" ↔ ")}: X ${(lane.offset_m[0]*100).toFixed(1)} / Y ${(lane.offset_m[1]*100).toFixed(1)} ซม.`).join(" · ") || "ยังไม่มี")+
-            (lastIrLane ? ` · ล่าสุด: ${labels[lastIrLane.status] || lastIrLane.status}` : "");
+            (lastIrLane ? ` · ล่าสุด: ${labels[lastIrLane.status] || lastIrLane.status}${lastIrLane.reason ? ` (${lastIrLane.reason})` : ""}` : "");
           wallPanel.append(note);
         }
         if (motionStop?.center_distance_m != null) {

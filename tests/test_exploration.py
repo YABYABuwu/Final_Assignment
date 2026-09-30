@@ -224,6 +224,8 @@ class ExplorationTests(unittest.TestCase):
             explorer._move((0, 0))
         self.assertFalse(explorer.ir_lanes)
         self.assertEqual(explorer.last_ir_lane["status"], "aborted")
+        self.assertIn("needs 0.110 m lateral offset; allowed 0.100 m",
+                      explorer.last_ir_lane["reason"])
 
     def test_ir_lane_failed_or_emergency_traversal_is_not_saved(self):
         for failure in ("fail", "emergency"):
@@ -328,6 +330,52 @@ class ExplorationTests(unittest.TestCase):
         self.assertEqual(calls.count("scan"), 5)
         self.assertEqual(calls[-2:], ["chassis_bias", "slam_bias"])
         self.assertEqual(explorer.snapshot()["heading_alignments"]["0,0"]["status"], "applied")
+        self.assertEqual(explorer._align_heading((1, 0))["status"], "no_suitable_wall")
+        self.assertEqual(explorer.snapshot()["last_applied_heading_alignment"]["cell"], [0, 0])
+
+    def test_wall_heading_accepts_tof_below_former_150_mm_minimum(self):
+        self.settings["heading_alignment"]["enabled"] = True
+        self.assertNotIn("min_range_m", self.settings["heading_alignment"])
+        slam_map = self.make_map()
+        chassis = SimpleNamespace(heading_bias_deg=0.0,
+                                  get_pose=lambda: (0.0, 0.0, 0.0),
+                                  stop=lambda: None)
+        chassis.set_heading_bias = lambda value: setattr(chassis, "heading_bias_deg", value)
+        worker = SimpleNamespace(set_heading_bias=lambda value: None,
+                                 status=lambda: {"error": None})
+        explorer = DFSExplorer(chassis, None, FakeLogger(), slam_map, self.settings)
+        explorer.slam_worker = worker
+        explorer.base_pose = (0.0, 0.0, 0.0)
+        explorer.wall_grid.observe((0, 0), (1, 0), .21, 135, 300, time.time())
+        explorer._prepare_gimbal = lambda force=False: None
+
+        def scan(delta, yaw_offset_deg=0.0, median_window=None):
+            explorer.last_scan_relative_yaw_deg = yaw_offset_deg
+            projection = math.cos(math.radians(yaw_offset_deg))
+            return (.21 / projection - .075) * 1000, yaw_offset_deg
+
+        explorer._scan_for_direction = scan
+        result = explorer._align_heading((0, 0))
+
+        self.assertEqual(result["status"], "applied")
+        self.assertLess(result["scans"][2]["range_mm"], 150)
+
+    def test_wall_heading_still_rejects_ray_that_misses_selected_wall(self):
+        self.settings["heading_alignment"]["enabled"] = True
+        slam_map = self.make_map()
+        chassis = SimpleNamespace(get_pose=lambda: (0.0, 0.0, 0.0), stop=lambda: None)
+        explorer = DFSExplorer(chassis, None, FakeLogger(), slam_map, self.settings)
+        explorer.slam_worker = SimpleNamespace(status=lambda: {"error": None})
+        explorer.base_pose = (0.0, 0.0, 0.0)
+        explorer.wall_grid.observe((0, 0), (1, 0), .275, 200, 300, time.time())
+        explorer._prepare_gimbal = lambda force=False: None
+        explorer._scan_for_direction = lambda *args, **kwargs: (600, 0)
+
+        result = explorer._align_heading((0, 0))
+
+        self.assertEqual(result["status"], "skipped_range")
+        self.assertEqual(result["rejected_offset_deg"], -25)
+        self.assertEqual(result["rejected_range_mm"], 600)
 
     def test_wall_heading_rejects_noncollinear_returns(self):
         self.settings["heading_alignment"]["enabled"] = True
@@ -843,7 +891,7 @@ class ExplorationTests(unittest.TestCase):
         self.assertAlmostEqual(explorer.cell_targets[(0, 0)][0], -.05)
         self.assertEqual(explorer.alignments[(0, 0)]["walls"], {"x+": .2})
         self.assertEqual(explorer.alignments[(0, 0)]["status"], "moved")
-        self.assertAlmostEqual(explorer.alignments[(0, 0)]["after_m"]["x+"], .25)
+        self.assertAlmostEqual(explorer.alignments[(0, 0)]["estimated_after_m"]["x+"], .25)
         explorer._move((0, 1))
         self.assertAlmostEqual(chassis.commands[-1][0], -.05)
         self.assertAlmostEqual(chassis.commands[-1][1], .6)
@@ -877,7 +925,7 @@ class ExplorationTests(unittest.TestCase):
         self.assertAlmostEqual(explorer.cell_targets[(0, 0)][0], -.075)
         self.assertEqual(len(chassis.commands), 1)
 
-    def test_alignment_rescans_between_bounded_moves(self):
+    def test_alignment_uses_one_wall_measurement_and_one_bounded_pid_move(self):
         settings = copy.deepcopy(self.settings)
         settings["wall_threshold_mm"] = 500
         settings["alignment"]["max_shift_m"] = .10
@@ -898,14 +946,14 @@ class ExplorationTests(unittest.TestCase):
 
         explorer._align_cell((0, 0))
 
-        self.assertEqual(len(chassis.commands), 2)
+        self.assertEqual(len(chassis.commands), 1)
         self.assertAlmostEqual(chassis.commands[0][1], -.10)
-        self.assertAlmostEqual(chassis.commands[1][1], -.157)
-        self.assertEqual(explorer.alignments[(0, 0)]["steps"], 2)
-        self.assertAlmostEqual(explorer.alignments[(0, 0)]["after_m"]["y-"], .25)
-        self.assertEqual(len(gimbal.commands), 3)  # One initial scan, then one after each move.
+        self.assertEqual(explorer.alignments[(0, 0)]["status"], "partial")
+        self.assertEqual(explorer.alignments[(0, 0)]["steps"], 1)
+        self.assertAlmostEqual(explorer.alignments[(0, 0)]["estimated_after_m"]["y-"], .307)
+        self.assertEqual(len(gimbal.commands), 1)
 
-    def test_alignment_refreshes_scan_after_waiting_for_pose(self):
+    def test_alignment_skips_stale_measurement_without_spinning_again(self):
         settings = copy.deepcopy(self.settings)
         settings["max_sample_age_s"] = .02
         slam_map = self.make_map()
@@ -930,10 +978,11 @@ class ExplorationTests(unittest.TestCase):
         explorer._motion_pose = delayed_pose
         explorer._align_cell((0, 0))
 
-        self.assertEqual(len(chassis.commands), 1)
-        self.assertGreaterEqual(len(gimbal.commands), 3)  # Refresh after the delayed pose.
+        self.assertEqual(len(chassis.commands), 0)
+        self.assertEqual(len(gimbal.commands), 1)
+        self.assertEqual(explorer.alignments[(0, 0)]["status"], "skipped_stale_scan")
 
-    def test_alignment_stops_if_wall_distance_does_not_improve(self):
+    def test_alignment_does_not_claim_unverified_wall_distance(self):
         settings = copy.deepcopy(self.settings)
         settings["wall_threshold_mm"] = 500
         settings["alignment"]["max_shift_m"] = .10
@@ -949,10 +998,11 @@ class ExplorationTests(unittest.TestCase):
 
         explorer._align_cell((0, 0))
         self.assertEqual(len(chassis.commands), 1)
-        self.assertEqual(explorer.alignments[(0, 0)]["status"], "stalled")
-        self.assertIn("remaining correction", explorer.alignments[(0, 0)]["reason"])
+        self.assertEqual(len(gimbal.commands), 1)
+        self.assertEqual(explorer.alignments[(0, 0)]["status"], "partial")
+        self.assertNotIn("after_m", explorer.alignments[(0, 0)])
 
-    def test_alignment_reverses_after_overshoot_instead_of_failing(self):
+    def test_alignment_does_not_rotate_again_after_pid_move(self):
         settings = copy.deepcopy(self.settings)
         settings["wall_threshold_mm"] = 500
         settings["alignment"]["max_shift_m"] = .10
@@ -974,12 +1024,88 @@ class ExplorationTests(unittest.TestCase):
 
         explorer._align_cell((0, 0))
 
-        self.assertEqual(len(chassis.commands), 2)
+        self.assertEqual(len(chassis.commands), 1)
         self.assertAlmostEqual(chassis.commands[0][0], -.10)
-        self.assertGreater(chassis.commands[1][0], chassis.commands[0][0])
-        self.assertEqual(explorer.alignments[(0, 0)]["status"], "moved")
-        self.assertLessEqual(abs(explorer.alignments[(0, 0)]["after_m"]["x-"] - .25),
-                             settings["alignment"]["tolerance_m"])
+        self.assertEqual(len(gimbal.commands), 1)
+        self.assertEqual(explorer.alignments[(0, 0)]["status"], "partial")
+
+    def test_alignment_runs_at_start_and_every_two_grid_moves_including_return(self):
+        settings = copy.deepcopy(self.settings)
+        settings["heading_alignment"]["enabled"] = True
+        settings["alignment"]["interval_steps"] = 2
+        slam_map = self.make_map()
+        logger = FakeLogger()
+        logger.set("attitude", (0, 0, 0))
+        explorer = DFSExplorer(None, None, logger, slam_map, settings)
+        edges = {frozenset((a, b)) for a, b in (
+            ((0, 0), (1, 0)), ((1, 0), (2, 0)))}
+        alignments = []
+
+        def can_cross(node, delta):
+            neighbor = (node[0] + delta[0], node[1] + delta[1])
+            return frozenset((node, neighbor)) in edges
+
+        def scan(node):
+            explorer.scanned_cells.add(node)
+            return {delta: can_cross(node, delta) for delta in explorer.DIRECTIONS}
+
+        def move(destination):
+            explorer.current_cell = destination
+            explorer.moves += 1
+            return True
+
+        with patch.object(explorer, "_prepare_gimbal"), \
+                patch.object(explorer, "_motion_pose", return_value=(0, 0, 0)), \
+                patch.object(explorer, "_scan_all_directions", side_effect=scan), \
+                patch.object(explorer, "_inspect_walls"), \
+                patch.object(explorer.wall_grid, "can_cross", side_effect=can_cross), \
+                patch.object(explorer, "_move", side_effect=move), \
+                patch.object(explorer, "_align_heading",
+                             side_effect=lambda node: alignments.append(("heading", explorer.moves))), \
+                patch.object(explorer, "_align_cell",
+                             side_effect=lambda node: alignments.append(("center", explorer.moves))):
+            result = explorer.run(FakeSlamWorker())
+
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(alignments, [(kind, step) for step in (0, 2, 4)
+                                      for kind in ("heading", "center")])
+        self.assertEqual(result["last_alignment_move"], 4)
+
+    def test_alignment_interval_config_requires_positive_integer(self):
+        import yaml
+        for value in (0, -1, 1.5, True, "2"):
+            with self.subTest(interval_steps=value), tempfile.TemporaryDirectory() as temp:
+                config = copy.deepcopy(self.config)
+                config["exploration"]["alignment"]["interval_steps"] = value
+                path = Path(temp) / "settings.yaml"
+                path.write_text(yaml.safe_dump(config), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "interval_steps"):
+                    load_config(path)
+
+    def test_gimbal_scans_stop_chassis_before_rotation(self):
+        settings = copy.deepcopy(self.settings)
+        slam_map = self.make_map()
+        logger = FakeLogger()
+        logger.set("attitude", (0, 0, 0))
+        stopped = [False]
+
+        class CheckingGimbal(SimulatedGimbal):
+            def moveto(self, *args, **kwargs):
+                self_test.assertTrue(stopped[0])
+                stopped[0] = False
+                return super().moveto(*args, **kwargs)
+
+        self_test = self
+        gimbal = CheckingGimbal(slam_map, logger, 2000)
+        chassis = SimpleNamespace(stop=lambda: stopped.__setitem__(0, True))
+        explorer = DFSExplorer(chassis, gimbal, logger, slam_map, settings)
+        explorer.base_pose = (0, 0, 0)
+        explorer.slam_worker = FakeSlamWorker()
+
+        explorer._scan_for_direction((1, 0))
+        explorer._prepare_gimbal(force=True)
+
+        self.assertEqual(len(gimbal.commands), 2)
 
     def test_disabled_alignment_keeps_wall_scan_and_skips_alignment(self):
         settings = copy.deepcopy(self.settings)
@@ -1030,8 +1156,8 @@ class ExplorationTests(unittest.TestCase):
                          {"x+": .30, "x-": .40})
         self.assertEqual(explorer.alignments[(0, 0)]["selected_sides"], ["x+", "x-"])
         self.assertEqual(explorer.alignments[(0, 0)]["axis_modes"], {"x": "between_walls"})
-        self.assertAlmostEqual(explorer.alignments[(0, 0)]["after_m"]["x+"], .35)
-        self.assertAlmostEqual(explorer.alignments[(0, 0)]["after_m"]["x-"], .35)
+        self.assertAlmostEqual(explorer.alignments[(0, 0)]["estimated_after_m"]["x+"], .35)
+        self.assertAlmostEqual(explorer.alignments[(0, 0)]["estimated_after_m"]["x-"], .35)
 
     def test_alignment_centers_between_y_walls_in_bounded_steps(self):
         settings = copy.deepcopy(self.settings)
@@ -1056,11 +1182,11 @@ class ExplorationTests(unittest.TestCase):
 
         explorer._align_cell((0, 0))
 
-        self.assertEqual(len(chassis.commands), 2)
+        self.assertEqual(len(chassis.commands), 1)
         self.assertAlmostEqual(chassis.commands[0][1], .05)
-        self.assertAlmostEqual(chassis.commands[1][1], .10)
-        self.assertAlmostEqual(explorer.alignments[(0, 0)]["after_m"]["y+"], .35)
-        self.assertAlmostEqual(explorer.alignments[(0, 0)]["after_m"]["y-"], .35)
+        self.assertEqual(explorer.alignments[(0, 0)]["status"], "partial")
+        self.assertAlmostEqual(explorer.alignments[(0, 0)]["estimated_after_m"]["y+"], .40)
+        self.assertAlmostEqual(explorer.alignments[(0, 0)]["estimated_after_m"]["y-"], .30)
 
     def test_grid_emergency_stop_after_midpoint_keeps_planned_center_when_unconfirmed(self):
         class EmergencyChassis(SimulatedChassis):
@@ -1650,6 +1776,78 @@ class ExplorationTests(unittest.TestCase):
         explorer.wall_grid.observe((1, 0), (-1, 0), .175, 100, 300, time.time())
         self.assertFalse(explorer._can_return((1, 0), (0, 0)))
         self.assertEqual(gimbal.commands, [])
+
+    def test_dfs_routes_to_frontier_through_shortcut_and_replans_when_blocked(self):
+        edges = {
+            frozenset((a, b)) for a, b in (
+                ((0, 0), (1, 0)), ((1, 0), (2, 0)),
+                ((2, 0), (2, -1)), ((2, -1), (1, -1)),
+                ((1, -1), (0, -1)), ((0, -1), (0, 0)),
+                ((1, -1), (1, 0)), ((0, 0), (-1, 0)),
+            )
+        }
+        for block_shortcut in (False, True):
+            with self.subTest(block_shortcut=block_shortcut):
+                settings = copy.deepcopy(self.settings)
+                settings["max_nodes"] = 7 if block_shortcut else 8
+                settings["alignment"]["enabled"] = False
+                settings["heading_alignment"]["enabled"] = False
+                slam_map = self.make_map()
+                logger = FakeLogger()
+                logger.set("attitude", (0, 0, 0))
+                explorer = DFSExplorer(None, None, logger, slam_map, settings)
+                moves = []
+                shortcut_blocked = [False]
+
+                def scan(node):
+                    if node in explorer.scanned_cells:
+                        return {delta: explorer.wall_grid.can_cross(node, delta)
+                                for delta in explorer.DIRECTIONS}
+                    explorer.scanned_cells.add(node)
+                    for delta in explorer.DIRECTIONS:
+                        neighbor = (node[0] + delta[0], node[1] + delta[1])
+                        is_open = frozenset((node, neighbor)) in edges
+                        explorer.wall_grid.observe(
+                            node, delta, .675 if is_open else .2,
+                            600 if is_open else 100, 500, time.time())
+                    return {delta: explorer.wall_grid.can_cross(node, delta)
+                            for delta in explorer.DIRECTIONS}
+
+                def move(destination):
+                    source = explorer.current_cell
+                    moves.append((source, destination))
+                    if len(moves) > 30:
+                        raise AssertionError(moves)
+                    if (block_shortcut and not shortcut_blocked[0]
+                            and source == (0, -1) and destination == (0, 0)):
+                        shortcut_blocked[0] = True
+                        explorer.wall_grid.observe(source, (0, 1), .2, 100, 500,
+                                                   time.time())
+                        return False
+                    explorer.current_cell = destination
+                    explorer.moves += 1
+                    return True
+
+                with patch.object(explorer, "_prepare_gimbal"), \
+                        patch.object(explorer, "_motion_pose", return_value=(0, 0, 0)), \
+                        patch.object(explorer, "_scan_all_directions", side_effect=scan), \
+                        patch.object(explorer, "_move", side_effect=move):
+                    result = explorer.run(FakeSlamWorker())
+
+                self.assertEqual(result["status"],
+                                 "node_limit_reached" if block_shortcut else "completed")
+                self.assertEqual(result["visited"][-1], [2, 0])
+                self.assertIn(((0, -1), (0, 0)), moves)
+                if block_shortcut:
+                    self.assertIn(((0, -1), (1, -1)), moves)
+                    self.assertIn(((1, -1), (1, 0)), moves)
+                    self.assertEqual(result["route_blockages"], 1)
+                    self.assertEqual(moves[-1], ((0, 0), (-1, 0)))
+                else:
+                    self.assertNotIn(((0, -1), (1, -1)), moves)
+                    self.assertEqual(result["route_blockages"], 0)
+                    self.assertEqual(moves[-1], ((-1, 0), (0, 0)))
+                    self.assertEqual(explorer.current_cell, (0, 0))
 
     def test_slam_worker_uses_logger_streams_and_rejects_unsafe_status(self):
         timestamp = time.time()
