@@ -1023,7 +1023,7 @@ class DFSExplorer:
             time.sleep(0.05)
 
     def run(self, slam_worker):
-        """Explore new cells with fresh scans, then return over known open edges."""
+        """Explore new cells with fresh scans and stop at the node limit."""
         self.slam_worker = slam_worker
         try:
             self._set_status("starting")
@@ -1056,19 +1056,9 @@ class DFSExplorer:
                     current = self.stack[-1]
                     node_count = len(self.visited)
                 if node_count >= self.settings["max_nodes"]:
-                    self._set_status("node_limit_returning")
-                    while len(self.stack) > 1:
-                        with self.lock:
-                            child, parent = self.stack[-1], self.stack[-2]
-                        if not self._can_return(child, parent):
-                            raise MissionStop("DFS cannot safely return to the start cell")
-                        self._set_status("returning_to_start")
-                        returned = self._move(parent)
-                        if not returned:
-                            raise MissionStop("DFS cannot safely return to the start cell")
-                        with self.lock:
-                            self.stack.pop()
-                    self._set_status("node_limit_returned")
+                    # Keep the robot at the last explored cell. Backtracking is
+                    # still used only while DFS needs to reach another branch.
+                    self._set_status("node_limit_reached")
                     return self.snapshot()
 
                 newly_scanned = current not in self.scanned_cells

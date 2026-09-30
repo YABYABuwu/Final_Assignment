@@ -46,19 +46,21 @@ def recovery_vector(sides, speed, attempt=1, end="rear", mode="staged",
 
     diag = speed / math.sqrt(2.0)
 
-    if mode == "cardinal" and movement_axis == "lateral":
-        if not forward_clear:
-            return "blocked", 0.0, 0.0
-        return ("forward" if end == "rear" else "backward"), longitudinal, 0.0
-
     # Both sides blocked: escape purely longitudinally
     if right and left:
         if mode == "cardinal" and not forward_clear:
             return "blocked", 0.0, 0.0
         return ("forward" if end == "rear" else "backward"), longitudinal, 0.0
 
-    # In a forward/backward move, leave a detected side laterally on every attempt.
+    # Alternate cardinal axes between attempts so a blocked first escape does
+    # not repeat forever in the same direction.
     if mode == "cardinal":
+        longitudinal_attempt = ((movement_axis == "lateral" and attempt % 2 == 1) or
+                                (movement_axis != "lateral" and attempt % 2 == 0))
+        if longitudinal_attempt:
+            if not forward_clear:
+                return "blocked", 0.0, 0.0
+            return ("forward" if end == "rear" else "backward"), longitudinal, 0.0
         if left:
             return "slide_right", 0.0, speed
         return "slide_left", 0.0, -speed
@@ -137,6 +139,22 @@ class IRBumper:
         return (all(type(value) is int and value == 0 for value in io_values) and
                 any(isinstance(value, (int, float)) and value > 0 for value in adc_values))
 
+    def _stream_reports_detection(self, values):
+        """Return True when DDS claims any configured bumper is active.
+
+        A partially recovered DDS stream can contain one valid high bit while
+        leaving the remaining IO values falsely low. Confirm every reported
+        contact through synchronous get_io() before blocking motion.
+        """
+        for side in ("right", "left"):
+            port = self.settings[side]
+            index = adapter_index(port["id"], port["port"])
+            active_io = port.get("active_io", self.settings.get("active_io"))
+            if (index < len(values) and active_io in (0, 1) and
+                    type(values[index]) is int and values[index] == active_io):
+                return True
+        return False
+
     def _read_direct_io(self):
         """Read configured ports synchronously, with a short shared cache."""
         cache_s = float(self.settings.get("direct_fallback_cache_s", 0.2))
@@ -177,7 +195,8 @@ class IRBumper:
         use_direct = (read_mode == "direct" or
                       (read_mode == "auto" and
                        self.settings.get("direct_io_fallback", True) and
-                       self._stream_io_is_invalid(values)))
+                       (self._stream_io_is_invalid(values) or
+                        self._stream_reports_detection(values))))
         if use_direct:
             direct_values, timestamp = self._read_direct_io()
             io_source = "direct" if read_mode == "direct" else "direct_fallback"
@@ -248,13 +267,13 @@ class IRBumper:
 
     def blocks_motion(self, x, y, z):
         """Guard motion toward this bumper, sideways travel and yaw."""
-        # Do not let a small lateral/yaw correction trap the robot against an
-        # obstacle it is already moving away from.  This also keeps an active
-        # rear IR from blocking forward travel (and front IR from blocking
-        # reverse travel) while the heading PID applies a minor turn.
+        # Do not trap the robot against an obstacle when it translates directly
+        # away. Rotation is never exempt because it can sweep a corner inward.
         sliding = abs(y) > abs(x)
         away_speed = x if self.end == "rear" else -x
-        if not sliding and away_speed > 0 and away_speed >= abs(y):
+        # Any yaw can sweep the contacted corner farther into the obstacle, so
+        # only bypass this bumper for a purely translating escape.
+        if not sliding and away_speed > 0 and away_speed >= abs(y) and z == 0:
             self.last_block = None
             return False
 

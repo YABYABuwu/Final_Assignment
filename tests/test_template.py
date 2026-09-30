@@ -73,8 +73,10 @@ class TemplateTests(unittest.TestCase):
         self.assertEqual(config["exploration"]["tof_median_window"] % 2, 1)
         self.assertIsInstance(config["exploration"]["alignment"]["enabled"], bool)
         self.assertGreater(config["exploration"]["emergency_stop_distance_m"], 0)
-        self.assertNotIn("recovery_max_attempts", config["front_ir"])
-        self.assertNotIn("recovery_max_attempts", config["rear_ir"])
+        self.assertEqual(config["front_ir"]["recovery_max_attempts"], 8)
+        self.assertEqual(config["rear_ir"]["recovery_max_attempts"], 8)
+        self.assertEqual(config["front_ir"]["recovery_total_max_m"], .24)
+        self.assertEqual(config["rear_ir"]["recovery_total_max_m"], .24)
         self.assertNotIn("min_range_m", config["exploration"]["map"])
         self.assertNotIn("max_range_m", config["exploration"]["map"])
 

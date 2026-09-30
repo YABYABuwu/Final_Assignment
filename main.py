@@ -12,6 +12,7 @@ from src.logger import SensorLogger
 from src.mission_stop import MissionStop
 from src.rear_ir import FrontIRBumper, RearIRBumper
 from src.slam import OccupancyGridSLAM, SlamWorker
+from src.sound_player import play_startup_sound
 
 
 def _sdk_connection_type(name, sdk_conn):
@@ -55,6 +56,7 @@ def main():
             config["connection"]["type"], conn
         ))
         connected = True
+        play_startup_sound(ep_robot)
         logger = SensorLogger(ep_robot, log_settings)
         logger.start()
         motion_settings = config["motion"].copy()

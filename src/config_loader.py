@@ -169,6 +169,16 @@ def load_config(path=DEFAULT_CONFIG):
             value = ir.get(name)
             if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
                 raise ValueError(f"{key}.{name} must be a positive number")
+        max_attempts = ir.get("recovery_max_attempts", 1)
+        if type(max_attempts) is not int or not 1 <= max_attempts <= 10:
+            raise ValueError(f"{key}.recovery_max_attempts must be an integer from 1 to 10")
+        total_max_m = ir.get("recovery_total_max_m", ir["recovery_max_m"])
+        if (type(total_max_m) not in (int, float) or
+                not math.isfinite(total_max_m) or
+                total_max_m < ir["recovery_max_m"]):
+            raise ValueError(
+                f"{key}.recovery_total_max_m must be at least recovery_max_m"
+            )
         if ir["recovery_speed_m_s"] > motion["max_speed_m_s"]:
             raise ValueError(f"{key}.recovery_speed_m_s cannot exceed motion.max_speed_m_s")
         exploration_speed = config["exploration"].get("max_speed_m_s")
@@ -178,8 +188,10 @@ def load_config(path=DEFAULT_CONFIG):
             raise ValueError(f"{key}.recovery_speed_m_s cannot exceed exploration.max_speed_m_s")
         step_m = config["exploration"].get("step_m")
         if (type(step_m) in (int, float) and math.isfinite(step_m) and
-                ir["recovery_max_m"] >= step_m / 2):
-            raise ValueError(f"{key}.recovery_max_m must be below half an exploration step")
+                total_max_m >= step_m / 2):
+            raise ValueError(
+                f"{key}.recovery_total_max_m must be below half an exploration step"
+            )
         clear_samples = ir.get("recovery_clear_samples")
         if type(clear_samples) is not int or not 1 <= clear_samples <= 20:
             raise ValueError(f"{key}.recovery_clear_samples must be an integer from 1 to 20")
@@ -191,6 +203,11 @@ def load_config(path=DEFAULT_CONFIG):
         tof_clear = ir.get("forward_tof_clear_mm")
         if tof_clear is not None and (type(tof_clear) not in (int, float) or not math.isfinite(tof_clear) or tof_clear <= 0):
             raise ValueError(f"{key}.forward_tof_clear_mm must be a positive number")
+        tof_max_age = ir.get("forward_tof_max_age_s")
+        if (tof_max_age is not None and
+                (type(tof_max_age) not in (int, float) or
+                 not math.isfinite(tof_max_age) or tof_max_age <= 0)):
+            raise ValueError(f"{key}.forward_tof_max_age_s must be a positive number")
         if not isinstance(ir.get("direct_io_fallback", True), bool):
             raise ValueError(f"{key}.direct_io_fallback must be true or false")
         if ir.get("io_read_mode", "auto") not in ("auto", "direct", "stream"):

@@ -18,6 +18,7 @@ import time
 from src.config_loader import load_config
 from src.planner import GridMap, MultiTargetPlanner, plot_mission_map, find_path_bfs, find_path_astar
 from src.mission_stop import MissionStop
+from src.sound_player import play_startup_sound
 
 
 def parse_targets_arg(target_str):
@@ -218,6 +219,7 @@ def main():
     try:
         ep_robot.initialize(conn_type=sdk_conn_type(config["connection"]["type"]))
         connected = True
+        play_startup_sound(ep_robot)
         logger = SensorLogger(ep_robot, log_settings)
         logger.start()
 

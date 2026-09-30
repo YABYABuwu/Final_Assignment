@@ -461,7 +461,7 @@ class ExplorationTests(unittest.TestCase):
         self.assertFalse(slam_map.scan_is_valid(0))
         self.assertFalse(slam_map.scan_is_valid(float("inf")))
 
-    def test_dfs_visits_nodes_and_returns_to_start(self):
+    def test_dfs_stops_at_current_cell_when_node_limit_is_reached(self):
         slam_map = self.make_map()
         logger = FakeLogger()
         logger.set("attitude", (0, 0, 0))
@@ -474,13 +474,12 @@ class ExplorationTests(unittest.TestCase):
 
         result = explorer.run(worker)
 
-        self.assertEqual(result["status"], "node_limit_returned")
+        self.assertEqual(result["status"], "node_limit_reached")
         self.assertEqual(len(result["visited"]), 4)
-        self.assertEqual(result["stack"], [[0, 0]])
-        self.assertEqual(result["moves"], 6)
-        self.assertAlmostEqual(slam_map.pose[0], 0.0)
-        self.assertAlmostEqual(slam_map.pose[1], 0.0)
-        self.assertEqual(slam_map.exploration_state["status"], "node_limit_returned")
+        self.assertEqual(result["moves"], 3)
+        self.assertEqual(result["stack"][-1], list(explorer.current_cell))
+        self.assertNotEqual(explorer.current_cell, (0, 0))
+        self.assertEqual(slam_map.exploration_state["status"], "node_limit_reached")
 
     def test_dfs_scans_new_cell_before_forward_move_but_not_return(self):
         class CheckingChassis(SimulatedChassis):
@@ -512,8 +511,8 @@ class ExplorationTests(unittest.TestCase):
         settings["max_nodes"] = 2
         result = DFSExplorer(chassis, gimbal, logger, slam_map, settings).run(FakeSlamWorker())
 
-        self.assertEqual(result["status"], "node_limit_returned")
-        self.assertEqual(len(chassis.commands), 2)
+        self.assertEqual(result["status"], "node_limit_reached")
+        self.assertEqual(len(chassis.commands), 1)
 
     def test_fresh_travel_scan_rejects_edge_that_closed_after_four_side_scan(self):
         settings = copy.deepcopy(self.settings)
@@ -536,7 +535,7 @@ class ExplorationTests(unittest.TestCase):
 
         result = explorer.run(FakeSlamWorker())
 
-        self.assertEqual(result["status"], "node_limit_returned")
+        self.assertEqual(result["status"], "node_limit_reached")
         self.assertGreaterEqual(front_scans[0], 2)
         self.assertEqual(chassis.commands[0][:2], (0.0, -.6))
         self.assertEqual(explorer.wall_grid.state((0, 0), (1, 0)), "wall")
@@ -968,14 +967,13 @@ class ExplorationTests(unittest.TestCase):
                     delta: delta == (1, 0) for delta in explorer.DIRECTIONS}), \
                 patch.object(explorer.wall_grid, "can_cross",
                              side_effect=lambda node, delta: delta == (1, 0)), \
-                patch.object(explorer, "_can_return", return_value=True), \
                 patch.object(explorer, "_move", side_effect=move):
             result = explorer.run(FakeSlamWorker())
 
-        self.assertEqual(result["status"], "node_limit_returned")
-        self.assertEqual(attempts, [(1, 0), (0, 0)])
-        self.assertEqual(explorer.status, "node_limit_returned")
-        self.assertEqual(explorer.stack, [(0, 0)])
+        self.assertEqual(result["status"], "node_limit_reached")
+        self.assertEqual(attempts, [(1, 0)])
+        self.assertEqual(explorer.status, "node_limit_reached")
+        self.assertEqual(explorer.stack, [(0, 0), (1, 0)])
 
     def test_grid_motion_accepts_measured_pitch_offset_within_calibrated_tolerance(self):
         class OffsetPitchChassis(SimulatedChassis):
@@ -1412,7 +1410,7 @@ class ExplorationTests(unittest.TestCase):
         self.assertEqual(result, "recenter-action")
         self.assertEqual(calls, [{"pitch_speed": 40, "yaw_speed": 50}])
 
-    def test_dfs_explores_and_backtracks_inside_a_simulated_room(self):
+    def test_dfs_stops_without_returning_after_reaching_room_node_limit(self):
         range_provider = lambda pose, yaw: self.room_range(pose, yaw, half_extent=2.0)
         slam_map = OccupancyGridSLAM(self.settings)
         slam_map.update((0, 0, 0), range_provider((0, 0, 0), 0))
@@ -1426,15 +1424,13 @@ class ExplorationTests(unittest.TestCase):
 
         result = explorer.run(FakeSlamWorker())
 
-        self.assertEqual(result["status"], "node_limit_returned")
+        self.assertEqual(result["status"], "node_limit_reached")
         self.assertEqual(len(result["visited"]), 8)
-        self.assertGreater(result["moves"], len(result["visited"]) - 1)
-        self.assertEqual(result["stack"], [[0, 0]])
-        self.assertAlmostEqual(slam_map.pose[0], 0.0)
-        self.assertAlmostEqual(slam_map.pose[1], 0.0)
+        self.assertEqual(result["stack"][-1], list(explorer.current_cell))
+        self.assertNotEqual(explorer.current_cell, (0, 0))
         self.assertGreater(slam_map.to_dict()["counts"]["occupied_cells"], 0)
 
-    def test_return_to_visited_cell_only_points_gimbal_along_travel(self):
+    def test_node_limit_does_not_issue_a_return_scan(self):
         settings = dict(self.settings)
         settings["max_nodes"] = 2
         slam_map = OccupancyGridSLAM(settings)
@@ -1447,9 +1443,9 @@ class ExplorationTests(unittest.TestCase):
 
         result = explorer.run(FakeSlamWorker())
 
-        self.assertEqual(result["status"], "node_limit_returned")
-        self.assertEqual(result["moves"], 2)
-        self.assertEqual(len(gimbal.commands), 7)  # Recenter, four directions, travel and return scans.
+        self.assertEqual(result["status"], "node_limit_reached")
+        self.assertEqual(result["moves"], 1)
+        self.assertEqual(len(gimbal.commands), 6)  # Recenter, four directions and one travel scan.
         self.assertEqual(explorer.scanned_cells, {(0, 0)})
 
     def test_revisiting_scanned_cell_reuses_four_recorded_sides(self):

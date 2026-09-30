@@ -405,7 +405,7 @@
       const backtrackTarget = /^backtracking_to_(-?\d+)_(-?\d+)$/.exec(dfsStatus);
       document.getElementById("dfs-status").textContent = scanProgress ? `สแกน ${scanProgress[1]}/${scanProgress[2]} ทิศ` :
         backtrackTarget ? `กลับช่อง ${backtrackTarget[1]},${backtrackTarget[2]} · ใช้ขอบที่บันทึกไว้` :
-        dfsStatus === "returning_to_start" ? "กลับจุดเริ่ม · ใช้ขอบที่บันทึกไว้" :
+        dfsStatus === "node_limit_reached" ? "สำรวจครบจำนวนกริด · หยุดที่ตำแหน่งปัจจุบัน" :
         dfsStatus === "centering_gimbal" ? "กำลังตั้งศูนย์ gimbal ก่อนเริ่ม DFS" :
         dfsStatus === "recenter_for_heading" ? "กำลังตั้งศูนย์ gimbal ก่อนวัดมุมกำแพง" :
         dfsStatus === "measuring_wall_heading" ? "หยุดนิ่ง · วัดมุมกำแพงหลายจุด" :

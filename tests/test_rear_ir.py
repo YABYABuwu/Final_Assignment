@@ -21,6 +21,7 @@ class FakeAdapter:
     def __init__(self):
         self.callback = None
         self.commands = []
+        self.direct_io = {}
 
     def sub_adapter(self, **options):
         self.callback = options["callback"]
@@ -31,6 +32,9 @@ class FakeAdapter:
 
     def drive_speed(self, **command):
         self.commands.append(command)
+
+    def get_io(self, id, port):
+        return self.direct_io.get((id, port), 1)
 
 
 class RearIRTests(unittest.TestCase):
@@ -88,6 +92,36 @@ class RearIRTests(unittest.TestCase):
         self.assertFalse(bumper.snapshot()["sides"]["right"]["detected"])
         self.assertFalse(bumper.snapshot()["sides"]["left"]["detected"])
 
+    def test_auto_mode_falls_back_to_direct_io_for_invalid_dds_stream(self):
+        settings = dict(self.config["rear_ir"], io_read_mode="auto")
+        bumper = RearIRBumper(self.logger, settings)
+        self.adapter.callback(([0] * 12, [100] * 12))
+
+        state = bumper.snapshot()
+
+        self.assertEqual(state["io_source"], "direct_fallback")
+        self.assertFalse(state["sides"]["right"]["detected"])
+        self.assertFalse(state["sides"]["left"]["detected"])
+
+    def test_auto_mode_confirms_partial_low_stream_with_direct_io(self):
+        settings = dict(self.config["rear_ir"], io_read_mode="auto")
+        bumper = RearIRBumper(self.logger, settings)
+        partial_stream = [0] * 12
+        partial_stream[0] = 1
+        self.adapter.callback((partial_stream, [500] * 12))
+
+        state = bumper.snapshot()
+
+        self.assertEqual(state["io_source"], "direct_fallback")
+        self.assertFalse(state["sides"]["right"]["detected"])
+        self.assertFalse(state["sides"]["left"]["detected"])
+
+    def test_default_config_enables_fallback_and_keeps_calibration_off(self):
+        config = load_config()
+        for name in ("front_ir", "rear_ir"):
+            self.assertEqual(config[name]["io_read_mode"], "auto")
+            self.assertFalse(config[name]["auto_calibrate_io"])
+
     def test_recovery_vector_moves_away_from_each_detected_side(self):
         def sides(right, left):
             return {"right": {"detected": right}, "left": {"detected": left}}
@@ -112,25 +146,44 @@ class RearIRTests(unittest.TestCase):
         right = {"right": {"detected": True}, "left": {"detected": False}}
         both = {"right": {"detected": True}, "left": {"detected": True}}
         for end in ("front", "rear"):
-            for attempt in (1, 2, 3):
+            expected_longitudinal = (
+                ("backward", -.08, 0.0) if end == "front" else
+                ("forward", .08, 0.0))
+            self.assertEqual(
+                recovery_vector(left, .08, 1, end, "cardinal",
+                                movement_axis="longitudinal"),
+                ("slide_right", 0.0, .08))
+            self.assertEqual(
+                recovery_vector(right, .08, 1, end, "cardinal",
+                                movement_axis="longitudinal"),
+                ("slide_left", 0.0, -.08))
+            for sides in (left, right):
                 self.assertEqual(
-                    recovery_vector(left, .08, attempt, end, "cardinal",
+                    recovery_vector(sides, .08, 2, end, "cardinal",
                                     movement_axis="longitudinal"),
-                    ("slide_right", 0.0, .08))
+                    expected_longitudinal)
                 self.assertEqual(
-                    recovery_vector(right, .08, attempt, end, "cardinal",
+                    recovery_vector(sides, .08, 1, end, "cardinal",
+                                    movement_axis="lateral"),
+                    expected_longitudinal)
+            self.assertEqual(
+                recovery_vector(left, .08, 2, end, "cardinal",
+                                movement_axis="lateral"),
+                ("slide_right", 0.0, .08))
+            self.assertEqual(
+                recovery_vector(right, .08, 2, end, "cardinal",
+                                movement_axis="lateral"),
+                ("slide_left", 0.0, -.08))
+            for attempt in (1, 2):
+                self.assertEqual(
+                    recovery_vector(both, .08, attempt, end, "cardinal",
                                     movement_axis="longitudinal"),
-                    ("slide_left", 0.0, -.08))
-                expected = (("backward", -.08, 0.0) if end == "front" else
-                            ("forward", .08, 0.0))
-                for sides in (left, right, both):
-                    self.assertEqual(
-                        recovery_vector(sides, .08, attempt, end, "cardinal",
-                                        movement_axis="lateral"), expected)
-                self.assertEqual(
-                    recovery_vector(left, .08, attempt, end, "cardinal",
-                                    forward_clear=False, movement_axis="lateral"),
-                    ("blocked", 0.0, 0.0))
+                    expected_longitudinal)
+            self.assertEqual(
+                recovery_vector(left, .08, 2, end, "cardinal",
+                                forward_clear=False,
+                                movement_axis="longitudinal"),
+                ("blocked", 0.0, 0.0))
 
     def test_slide_checks_both_sensors_at_each_end(self):
         io = [1] * 12
@@ -180,7 +233,7 @@ class RearIRTests(unittest.TestCase):
         chassis = ChassisController(self.robot, self.logger, self.config["motion"])
         chassis.get_pose = lambda: (0.0, 0.0, 0.0)
         front_checks = [0]
-        front = SimpleNamespace(last_block=None)
+        front = SimpleNamespace(end="front", last_block=None)
 
         def front_blocks(x, y, z):
             front_checks[0] += 1
@@ -189,6 +242,14 @@ class RearIRTests(unittest.TestCase):
 
         front.blocks_motion = front_blocks
         chassis.front_ir = front
+        original_get_sample = self.logger.get_sample
+
+        def get_sample(name, max_age_s=None):
+            if name == "tof":
+                return (300,), time.time()
+            return original_get_sample(name, max_age_s=max_age_s)
+
+        self.logger.get_sample = get_sample
         samples = [0]
         settings = dict(self.config["rear_ir"], recovery_clear_samples=2)
         rear = SimpleNamespace(end="rear", settings=settings, recovering=None,
@@ -287,11 +348,12 @@ class RearIRTests(unittest.TestCase):
         io = [1] * 12
         io[adapter_index(4, 1)] = 0
         self.adapter.callback((io, [0] * 12))
-        with self.assertRaisesRegex(MissionStop, "rear IR left blocks front recovery"):
-            chassis.move_to(1, 0, yaw=0, timeout_s=.05)
+        with self.assertRaisesRegex(MissionStop, "recovery exhausted after 8 attempts"):
+            chassis.move_to(1, 0, yaw=0, timeout_s=.3)
         self.assertFalse(any(command["x"] != 0 or command["y"] != 0
                              for command in self.adapter.commands))
-        self.assertEqual(front.events[0]["status"], "stopped")
+        self.assertEqual([event["status"] for event in front.events],
+                         ["blocked"] * 8)
 
     def test_config_rejects_same_adapter_port_for_front_and_rear(self):
         settings = self.config.copy()
@@ -321,6 +383,11 @@ class RearIRTests(unittest.TestCase):
         self.assertTrue(self.bumper.blocks_motion(-0.1, 0, 0))
         self.assertEqual(self.bumper.snapshot()["state"], "waiting_data")
 
+    def test_rotation_is_not_exempt_while_translating_away(self):
+        self.send_io(0, 1)
+        self.assertTrue(self.bumper.blocks_motion(0.1, 0, 10))
+        self.assertEqual(self.bumper.last_block, "right")
+
     def test_detected_side_takes_priority_over_missing_other_side(self):
         self.send_io(2, 0)
         self.assertTrue(self.bumper.blocks_motion(-0.1, 0, 0))
@@ -343,6 +410,77 @@ class RearIRTests(unittest.TestCase):
         with self.assertRaises(TimeoutError):
             chassis.move_to(1, 0, yaw=0, timeout_s=0.01)
         self.assertTrue(any(command["x"] > 0 for command in self.adapter.commands))
+
+    def test_recovery_distance_limit_advances_to_the_next_attempt(self):
+        chassis = ChassisController(self.robot, self.logger, self.config["motion"])
+        chassis.get_pose = lambda: (0.0, 0.0, 0.0)
+        events = []
+        settings = dict(self.config["rear_ir"], recovery_max_m=0.0001)
+        bumper = SimpleNamespace(
+            end="rear", settings=settings, recovering=None, last_block="right",
+            snapshot=lambda: {
+                "sample_time": time.time(),
+                "sides": {"right": {"detected": True},
+                          "left": {"detected": False}},
+            },
+            finish_recovery=lambda *args: events.append(args),
+        )
+
+        recovered = chassis._recover_from_ir(
+            bumper, "right", 1, 0.001, None, None, None)
+
+        self.assertFalse(recovered)
+        self.assertEqual(events[0][1], "limit")
+
+    def test_missing_tof_stops_and_waits_before_forward_recovery(self):
+        chassis = ChassisController(self.robot, self.logger, self.config["motion"])
+        chassis.get_pose = lambda: (0.0, 0.0, 0.0)
+        chassis.front_ir = SimpleNamespace(
+            end="front", last_block=None,
+            blocks_motion=lambda x, y, z: False)
+        aborted = threading.Event()
+        snapshots = [0]
+        settings = dict(self.config["rear_ir"], recovery_max_m=1.0)
+
+        def snapshot():
+            snapshots[0] += 1
+            if snapshots[0] >= 3:
+                aborted.set()
+            return {
+                "sample_time": time.time() + snapshots[0],
+                "sides": {"right": {"detected": True},
+                          "left": {"detected": False}},
+            }
+
+        bumper = SimpleNamespace(
+            end="rear", settings=settings, recovering=None, last_block="right",
+            snapshot=snapshot, finish_recovery=lambda *args: None)
+
+        with self.assertRaisesRegex(MissionStop, "telemetry failed"):
+            chassis._recover_from_ir(
+                bumper, "right", 1, 0.001, None, aborted, None,
+                movement_axis="lateral")
+
+        self.assertFalse(any(command["x"] > 0 for command in self.adapter.commands))
+
+    def test_forward_recovery_requires_valid_tof_at_threshold(self):
+        chassis = ChassisController(self.robot, self.logger, self.config["motion"])
+        chassis.front_ir = SimpleNamespace(
+            end="front", last_block=None,
+            blocks_motion=lambda x, y, z: False)
+        bumper = SimpleNamespace(end="rear", settings=self.config["rear_ir"])
+        readings = iter((None, 0, 65535, float("nan"), 249, 250))
+
+        def get_sample(name, max_age_s=None):
+            value = next(readings)
+            return None if value is None else ((value,), time.time())
+
+        self.logger.get_sample = get_sample
+        expected = (None, None, None, None, False, True)
+        actual = tuple(
+            chassis._longitudinal_ir_escape_clearance(bumper, 0.08)[0]
+            for _ in expected)
+        self.assertEqual(actual, expected)
 
     def test_recovery_clears_then_resumes_original_target(self):
         motion = self.config["motion"].copy()
@@ -396,6 +534,8 @@ class RearIRTests(unittest.TestCase):
             if name == "adapter":
                 self.send_io(1 if steps[0] >= 2 else 0,
                              1 if steps[0] >= 3 else 0)
+            if name == "tof":
+                return (300,), time.time()
             return original_get_sample(name, max_age_s=max_age_s)
 
         def drive(**command):
@@ -416,27 +556,98 @@ class RearIRTests(unittest.TestCase):
         self.assertTrue(any(command["x"] < 0 for command in self.adapter.commands))
         self.assertTrue(all(command["z"] == 0 for command in self.adapter.commands))
 
-    def test_recovery_retries_without_attempt_limit_until_aborted(self):
+    def test_failed_recovery_tries_two_directions_before_stopping(self):
         motion = dict(self.config["motion"], control_period_s=0.001)
         chassis = ChassisController(self.robot, self.logger, motion)
         chassis.get_pose = lambda: (0.0, 0.0, 0.0)
-        bumper = SimpleNamespace(end="rear", last_block="right", settings={},
+        bumper = SimpleNamespace(end="rear", last_block="right",
+                                 settings={"recovery_max_attempts": 2},
                                  blocks_motion=lambda x, y, z: True)
         chassis.rear_ir = bumper
-        aborted = threading.Event()
         attempts = []
 
         def recover(*args, **kwargs):
             attempts.append(args[2])
-            if len(attempts) == 25:
-                aborted.set()
             return False
 
         chassis._recover_from_ir = recover
-        with self.assertRaisesRegex(MissionStop, "motion aborted"):
-            chassis.move_to(-1, 0, yaw=0, disable_timeout=True,
-                            abort_event=aborted)
-        self.assertEqual(attempts, list(range(1, 26)))
+        with self.assertRaisesRegex(MissionStop, "exhausted after 2 attempts"):
+            chassis.move_to(-1, 0, yaw=0, disable_timeout=True)
+        self.assertEqual(attempts, [1, 2])
+
+    def test_left_obstacle_on_both_ends_allows_lateral_right_recovery(self):
+        settings_f = dict(self.config["front_ir"], auto_calibrate_io=False, io_read_mode="stream")
+        settings_f["left"] = dict(settings_f["left"], active_io=0)
+        settings_f["right"] = dict(settings_f["right"], active_io=0)
+        front = FrontIRBumper(self.logger, settings_f)
+
+        settings_r = dict(self.config["rear_ir"], auto_calibrate_io=False, io_read_mode="stream",
+                          recovery_clear_samples=2)
+        settings_r["left"] = dict(settings_r["left"], active_io=0)
+        settings_r["right"] = dict(settings_r["right"], active_io=0)
+        rear = RearIRBumper(self.logger, settings_r)
+
+        motion = dict(self.config["motion"], control_period_s=0.001)
+        chassis = ChassisController(self.robot, self.logger, motion)
+        chassis.front_ir = front
+        chassis.rear_ir = rear
+        chassis.get_pose = lambda: (0.0, 0.0, 0.0)
+
+        # Both Front-Left and Rear-Left detect obstacle (0)
+        io = [1] * 12
+        io[adapter_index(settings_f["left"]["id"], settings_f["left"]["port"])] = 0
+        io[adapter_index(settings_r["left"]["id"], settings_r["left"]["port"])] = 0
+        self.adapter.callback((io, [0] * 12))
+
+        # Check that rear does not block front from escaping to the right
+        opp_blocked, opp_side = chassis._opposite_blocks_recovery_path(rear, 0.0, 0.08, "front")
+        self.assertFalse(opp_blocked)
+
+        # Drive speed commands during recovery slide to the right
+        steps = [0]
+        original_get_sample = self.logger.get_sample
+
+        def callback_sample(name, max_age_s=None):
+            if name == "adapter":
+                steps[0] += 1
+                # After 2 recovery steps, clear both obstacles
+                if steps[0] >= 3:
+                    clear_io = [1] * 12
+                    self.adapter.callback((clear_io, [0] * 12))
+            return original_get_sample(name, max_age_s=max_age_s)
+
+        self.logger.get_sample = callback_sample
+        recovered = chassis._recover_from_ir(front, "left", 1, 0.001, None, None, None,
+                                             movement_axis="longitudinal")
+        self.assertTrue(recovered)
+        self.assertTrue(any(command["y"] > 0 for command in self.adapter.commands))
+
+    def test_cross_conflict_lateral_recovery_is_blocked_by_opposite(self):
+        settings_f = dict(self.config["front_ir"], auto_calibrate_io=False, io_read_mode="stream")
+        settings_f["left"] = dict(settings_f["left"], active_io=0)
+        settings_f["right"] = dict(settings_f["right"], active_io=0)
+        front = FrontIRBumper(self.logger, settings_f)
+
+        settings_r = dict(self.config["rear_ir"], auto_calibrate_io=False, io_read_mode="stream")
+        settings_r["left"] = dict(settings_r["left"], active_io=0)
+        settings_r["right"] = dict(settings_r["right"], active_io=0)
+        rear = RearIRBumper(self.logger, settings_r)
+
+        motion = dict(self.config["motion"], control_period_s=0.001)
+        chassis = ChassisController(self.robot, self.logger, motion)
+        chassis.front_ir = front
+        chassis.rear_ir = rear
+        chassis.get_pose = lambda: (0.0, 0.0, 0.0)
+
+        # Front-Left (wants to slide right) but Rear-Right is blocked!
+        io = [1] * 12
+        io[adapter_index(settings_f["left"]["id"], settings_f["left"]["port"])] = 0
+        io[adapter_index(settings_r["right"]["id"], settings_r["right"]["port"])] = 0
+        self.adapter.callback((io, [0] * 12))
+
+        opp_blocked, opp_side = chassis._opposite_blocks_recovery_path(rear, 0.0, 0.08, "front")
+        self.assertTrue(opp_blocked)
+        self.assertEqual(opp_side, "right")
 
 
 if __name__ == "__main__":
