@@ -8,7 +8,7 @@ motion:
   timeout_s: 15               # เวลาสูงสุดต่อ waypoint
   sample_timeout_s: 1.0       # หาก position/attitude เก่ากว่านี้ ให้หยุด
   control_period_s: 0.1       # ระยะเวลาระหว่างคำสั่งความเร็ว
-  max_speed_m_s: 0.25         # เพดานความเร็วรวมของแกน x/y
+  max_speed_m_s: 0.3         # เพดานความเร็วรวมของแกน x/y
   braking_decel_m_s2: 0.3    # ค่าชะลอที่ใช้คำนวณความเร็วเมื่อเข้าใกล้ waypoint; ต้องสอบเทียบกับหุ่นจริง
   max_lateral_accel_m_s2: 0.30 # จำกัดการเร่งเฉพาะสไลด์ซ้าย/ขวา; เดินหน้า/ถอยหลังใช้ PID ตามเดิม
   max_turn_deg_s: 45          # เพดานความเร็วหมุน
@@ -87,14 +87,14 @@ rear_ir:
   io_read_mode: "auto" # ใช้ DDS stream ปกติ และ fallback ไป get_io(ID, Port) เมื่อ stream ผิดปกติ
   max_age_s: 0.5          # ข้อมูลเก่ากว่านี้หยุดการถอย/สไลด์/หมุนจนได้ค่าใหม่
   recovery_speed_m_s: 0.08 # ความเร็วหลบ IR
-  recovery_max_m: 0.03    # ขยับหลบทีละไม่เกิน 3 cm ต่อ attempt
+  recovery_max_m: 0.08    # ขยับหลบทีละไม่เกิน 8 cm ต่อ attempt (ให้พ้นกรวย IR ในครั้งเดียว)
   recovery_max_attempts: 8 # สลับสองทิศทางสูงสุดทิศละ 4 ครั้ง
   recovery_total_max_m: 0.24 # ระยะหลบสะสมสูงสุดก่อนหยุด mission
   recovery_clear_samples: 3 # ต้องเห็น IO ว่างจาก callback ใหม่ต่อเนื่องก่อนเดินต่อ
   recovery_mode: "cardinal" # เดินหน้า/ถอยหลังหลบ IR ซ้าย/ขวาด้วยการสไลด์; ตอนสไลด์เจอ IR หลังให้เดินหน้า
   forward_tof_clear_mm: 250 # ระยะ ToF ด้านหน้าที่ถือว่าโล่งและอนุญาตให้เดินหน้าหลบได้
   forward_tof_max_age_s: 0.5 # ToF ต้องสดไม่เกินค่านี้; หากขาด/invalid ให้หยุดรอ
-  direct_io_fallback: true  # ยืนยันด้วย get_io เมื่อ DDS ผิดปกติหรือรายงานว่า IR ติด
+  direct_io_fallback: false  # ปิดการยิง get_io synchronous เพื่อไม่ให้ติด timeout ค้าง
   direct_fallback_cache_s: 0.2 # จำกัดความถี่ synchronous SDK read ไม่ให้รบกวน telemetry
 
 # Front/Rear ใช้ polarity ที่กำหนดคงที่ เพราะปิด auto calibration
@@ -108,12 +108,12 @@ front_ir:
   io_read_mode: "auto" # ใช้ DDS stream ปกติ และ fallback ไป get_io(ID, Port) เมื่อ stream ผิดปกติ
   max_age_s: 0.5
   recovery_speed_m_s: 0.08
-  recovery_max_m: 0.03 # ขยับหลบทีละไม่เกิน 3 cm ต่อ attempt
+  recovery_max_m: 0.08 # ขยับหลบทีละไม่เกิน 8 cm ต่อ attempt (ให้พ้นกรวย IR ในครั้งเดียว)
   recovery_max_attempts: 8 # สลับสองทิศทางสูงสุดทิศละ 4 ครั้ง
   recovery_total_max_m: 0.24
   recovery_clear_samples: 3
   recovery_mode: "cardinal" # เดินหน้า/ถอยหลังหลบ IR ซ้าย/ขวาด้วยการสไลด์; ตอนสไลด์เจอ IR หน้าให้ถอยหลัง
-  direct_io_fallback: true # ยืนยันด้วย get_io เมื่อ DDS ผิดปกติหรือรายงานว่า IR ติด
+  direct_io_fallback: false # ปิดการยิง get_io synchronous เพื่อไม่ให้ติด timeout ค้าง
   direct_fallback_cache_s: 0.2
 
 mission:
@@ -210,8 +210,8 @@ exploration:
     fire_mode: infrared
   map:
     resolution_m: 0.05
-    width_m: 8.0
-    height_m: 8.0
+    width_m: 12.0
+    height_m: 12.0
     robot_clearance_m: 0.20 # ระยะจากหัว ToF ที่ไม่ทำแผนที่ใต้ตัวหุ่น; ไม่ใช่เกณฑ์รับ/ปฏิเสธค่า
     free_update: -0.40
     occupied_update: 0.85

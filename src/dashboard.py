@@ -259,12 +259,15 @@ class Dashboard:
                 self._send_content("application/json; charset=utf-8", b'{"loaded":true}')
 
             def _send_content(self, content_type, content):
-                self.send_response(200)
-                self.send_header("Content-Type", content_type)
-                self.send_header("Content-Length", str(len(content)))
-                self.send_header("Cache-Control", "no-store")
-                self.end_headers()
-                self.wfile.write(content)
+                try:
+                    self.send_response(200)
+                    self.send_header("Content-Type", content_type)
+                    self.send_header("Content-Length", str(len(content)))
+                    self.send_header("Cache-Control", "no-store")
+                    self.end_headers()
+                    self.wfile.write(content)
+                except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
+                    pass
 
             def _video_stream(self):
                 self.send_response(200)
