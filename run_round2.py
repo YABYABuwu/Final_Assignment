@@ -13,6 +13,7 @@ import os
 os.environ["MPLBACKEND"] = "Agg"
 
 import argparse
+import gc
 import ast
 import json
 from pathlib import Path
@@ -352,6 +353,9 @@ def main():
             else:
                 source = plan["full_path"][step_idx - 1] if step_idx else None
                 pose = navigator.move_to(source, cell, (target_x, target_y))
+                if source is not None and tuple(source) != tuple(cell):
+                    # Collect between cells after move_to has stopped the wheels.
+                    gc.collect()
             if pose is not None and len(pose) >= 3:
                 body_yaw = float(pose[2])
 

@@ -7,6 +7,7 @@ from src.mission_stop import MissionStop
 from src.slam import _wrap_degrees
 from src.targets import TargetTracker
 from src.gimbal_control import wait_for_gimbal_idle
+from src.ffmpeg_camera import CameraRestarted
 
 
 def _nearest_candidate(visible, color, shape, center):
@@ -67,6 +68,9 @@ class WallTargetInspector:
         self.last_progress_status = None
         self.wait_error = None
         self.command_detail = None
+        self.camera_generation = None
+        self.camera_frame_metadata = None
+        self.restarting_inspection = False
 
     def _deadline(self, gimbal=False):
         config = self.settings.get("target_inspection", {})
@@ -401,33 +405,53 @@ class WallTargetInspector:
                 after_frame=after,
             )
 
+        if getattr(self.camera_frames, "supports_frame_metadata", False) is True:
+            number, frame, metadata = self.camera_frames.wait_for_frame(
+                after, check_health=self._health, include_metadata=True)
+            if (self.camera_generation is not None and
+                    metadata["generation"] != self.camera_generation):
+                self.restarting_inspection = True
+                raise CameraRestarted("decoder restarted; reacquire wall targets")
+            self.camera_generation = metadata["generation"]
+            self.camera_frame_metadata = metadata
+            return number, frame
         return self.camera_frames.wait_for_frame(
             after,
             check_health=self._health,
         )
 
     def _fire(self, item, frame, aim_mode):
-        self._safe_status()
-
-        pitch, yaw, _ = self._angles()
-        expected_pitch, expected_yaw = self.commanded_angles
-
-        if (
-            abs(pitch - expected_pitch)
-            > self.settings["gimbal"]["pitch_tolerance_deg"]
-            or (
-                abs(_wrap_degrees(yaw - expected_yaw))
-                > self.settings["gimbal"]["angle_tolerance_deg"]
-            )
-        ):
-            raise MissionStop(
-                "target gimbal drifted before infrared fire"
-            )
-
         config = self.settings.get("target_inspection", {})
         shots = config.get("shots_per_target", 2)
-
-        self._health()
+        has_metadata = getattr(self.camera_frames, "supports_frame_metadata", False) is True
+        if has_metadata and self.camera_frame_metadata is None:
+            raise MissionStop("infrared fire requires a confirmed camera lock")
+        generation = self.camera_frame_metadata["generation"] if has_metadata else None
+        while True:
+            if has_metadata:
+                if not self.camera_frames.is_camera_current(generation):
+                    self.chassis.stop()
+                    if self.active_cell is not None:
+                        self._progress(self.active_cell, self.active_delta, "waiting_camera_frame",
+                                       reason="รอภาพสดก่อนยิง · คงมุมเล็งเดิม")
+                try:
+                    # The lock image intentionally predates gimbal movement.
+                    # Check fresh live images from the same decoder instead.
+                    self.camera_frames.wait_for_camera_health(generation, check_health=self._health)
+                except CameraRestarted:
+                    self.restarting_inspection = True
+                    raise
+            self._safe_status()
+            pitch, yaw, _ = self._angles()
+            expected_pitch, expected_yaw = self.commanded_angles
+            if (abs(pitch - expected_pitch) > self.settings["gimbal"]["pitch_tolerance_deg"] or
+                    abs(_wrap_degrees(yaw - expected_yaw)) > self.settings["gimbal"]["angle_tolerance_deg"]):
+                raise MissionStop("target gimbal drifted before infrared fire")
+            self._health()
+            if not has_metadata or self.camera_frames.is_camera_current(generation):
+                break
+            # If safety checks took time while images paused, wait for the
+            # stream and recheck angles without moving back to the scan pose.
 
         try:
             accepted = self.blaster.fire(
@@ -653,7 +677,22 @@ class WallTargetInspector:
 
         return result
 
-    def inspect(
+    def inspect(self, cell, delta, world_yaw, body_yaw, range_mm=None, initial_pitch=None):
+        """Keep this wall pending across decoder restarts without repeating shots."""
+        completed, attempted = [], []
+        while True:
+            self.camera_generation = None
+            self.camera_frame_metadata = None
+            self.restarting_inspection = False
+            try:
+                return self._inspect_once(cell, delta, world_yaw, body_yaw, range_mm,
+                                          initial_pitch, completed, attempted)
+            except CameraRestarted:
+                self.chassis.stop()
+                self._progress(cell, delta, "waiting_camera_frame",
+                               reason="กล้องกู้คืน · รอภาพสดแล้วค้นหาและเล็งใหม่ที่ผนังเดิม")
+
+    def _inspect_once(
         self,
         cell,
         delta,
@@ -661,6 +700,8 @@ class WallTargetInspector:
         body_yaw,
         range_mm=None,
         initial_pitch=None,
+        completed=None,
+        attempted=None,
     ):
         self.active_cell = cell
         self.active_delta = delta
@@ -714,7 +755,7 @@ class WallTargetInspector:
             "direction": list(delta),
             "pitch_deg": initial_pitch,
             "status": "checking",
-            "targets": [],
+            "targets": completed if completed is not None else [],
             "checked_at": time.time(),
         }
 
@@ -774,13 +815,13 @@ class WallTargetInspector:
                 self.color_ranges,
             )
 
-            attempted = []
+            attempted = attempted if attempted is not None else []
             confirm_frames = config["confirm_frames"]
             search_frames = config.get(
                 "search_frames", confirm_frames + 2
             )
 
-            for _ in range(config["max_targets_per_wall"]):
+            for _ in range(config["max_targets_per_wall"] - len(result["targets"])):
                 self._progress(cell, delta, "searching")
 
                 visible = {}
@@ -830,12 +871,6 @@ class WallTargetInspector:
                     key=lambda pair: pair[1].area,
                 )
 
-                attempted.append((
-                    item.color,
-                    item.shape,
-                    item.center,
-                ))
-
                 self._progress(
                     cell,
                     delta,
@@ -856,6 +891,9 @@ class WallTargetInspector:
                 outcome.setdefault("color", item.color)
                 outcome.setdefault("shape", item.shape)
                 result["targets"].append(outcome)
+                # Persist only finished attempts. A decoder restart while
+                # aiming must reacquire the target rather than mark it done.
+                attempted.append((item.color, item.shape, item.center))
 
                 if (
                     len(result["targets"])
@@ -882,7 +920,8 @@ class WallTargetInspector:
             try:
                 self.restoring = True
 
-                if self.active_action is None and self.wait_error is None:
+                if (self.active_action is None and self.wait_error is None and
+                        not self.restarting_inspection):
                     self._progress(
                         cell,
                         delta,
@@ -902,7 +941,10 @@ class WallTargetInspector:
 
             finally:
                 self.restoring = False
-                self.slam_worker.resume_mapping()
+                # During a camera retry the head may still be pitched down.
+                # Keep mapping paused until a completed inspection recenters it.
+                if not self.restarting_inspection:
+                    self.slam_worker.resume_mapping()
 
                 self._progress(
                     cell,

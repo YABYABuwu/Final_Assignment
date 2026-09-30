@@ -34,6 +34,9 @@ class Dashboard:
         self.frame_changed = threading.Condition()
         self.latest_jpeg = None
         self.latest_frame = None
+        self.latest_frame_monotonic = None
+        self.latest_frame_generation = None
+        self.supports_frame_metadata = True
         self.camera_targets = []
         self.frame_number = 0
         self.camera_error = None
@@ -65,6 +68,54 @@ class Dashboard:
             # Keep the last JPEG for display while waiting for a new image.
             self.frame_changed.notify_all()
 
+    def _sync_decoder_health(self):
+        snapshot = getattr(self.camera, "decoder_snapshot", None)
+        if callable(snapshot):
+            health = snapshot()
+            with self.frame_changed:
+                self.camera_health.update(health)
+
+    def is_frame_current(self, metadata):
+        """Reject incoming images from an earlier decoder or an expired frame."""
+        if metadata is None or metadata.get("timestamp") is None:
+            return False
+        if time.monotonic() - metadata["timestamp"] > self.settings.get("ffmpeg", {}).get("max_frame_age_s", .5):
+            return False
+        snapshot = getattr(self.camera, "decoder_snapshot", None)
+        if callable(snapshot):
+            health = snapshot()
+            return (health["decoder_state"] == "ready" and
+                    metadata.get("generation") == health["decoder_generation"])
+        return True
+
+    def is_camera_current(self, generation):
+        """Check the live stream independently of the pre-aim lock image."""
+        with self.frame_changed:
+            return (self.latest_frame is not None and
+                    self.latest_frame_generation == generation and
+                    self.is_frame_current({"timestamp": self.latest_frame_monotonic,
+                                           "generation": self.latest_frame_generation}))
+
+    def wait_for_camera_health(self, generation, check_health=None):
+        """Wait in place for live images; only a real restart invalidates a lock."""
+        from src.ffmpeg_camera import CameraRestarted
+
+        with self.frame_changed:
+            while self.running.is_set() and self.camera_error is None:
+                if check_health is not None:
+                    check_health()
+                snapshot = getattr(self.camera, "decoder_snapshot", None)
+                if callable(snapshot):
+                    health = snapshot()
+                    if health["decoder_generation"] != generation:
+                        raise CameraRestarted("decoder restarted before infrared fire")
+                    if health["decoder_state"] == "error":
+                        raise MissionStop(health["last_decoder_error"] or "camera decoder failed")
+                if self.is_camera_current(generation):
+                    return
+                self.frame_changed.wait(.1)
+        raise MissionStop(self.camera_error or "camera stopped before infrared fire")
+
     def _camera_loop(self):
         """Only this thread reads frames from the SDK camera."""
         import cv2
@@ -79,6 +130,11 @@ class Dashboard:
                     timeout=min(period, .02),
                     strategy="newest",
                 )
+                self._sync_decoder_health()
+                metadata = {
+                    "timestamp": getattr(self.camera, "last_read_timestamp", None) or time.monotonic(),
+                    "generation": getattr(self.camera, "last_read_generation", None),
+                }
 
                 if image is None:
                     self._skip_camera_frame(
@@ -178,7 +234,7 @@ class Dashboard:
                         ],
                     )
 
-                    if ok:
+                    if ok and self.is_frame_current(metadata):
                         with self.frame_changed:
                             if (
                                 self.camera_health["state"]
@@ -201,6 +257,8 @@ class Dashboard:
                                 if hasattr(image, "copy")
                                 else image
                             )
+                            self.latest_frame_monotonic = metadata["timestamp"]
+                            self.latest_frame_generation = metadata["generation"]
                             self.camera_targets = camera_targets
                             self.frame_number += 1
                             self.frame_changed.notify_all()
@@ -210,6 +268,7 @@ class Dashboard:
                         )
 
             except (Empty, OSError, cv2.error) as error:
+                self._sync_decoder_health()
                 # Temporary frame/network/decoding failure:
                 # skip this read and request the newest frame next.
                 self._skip_camera_frame(
@@ -218,6 +277,7 @@ class Dashboard:
 
             except Exception as error:
                 # Unexpected programming errors remain visible.
+                self._sync_decoder_health()
                 self.camera_error = str(error)
                 self.camera_health["state"] = "error"
                 self.running.clear()
@@ -233,15 +293,19 @@ class Dashboard:
             if remaining > 0:
                 time.sleep(remaining)
                 
-    def wait_for_frame(self, after_number=0, check_health=None):
+    def wait_for_frame(self, after_number=0, check_health=None, include_metadata=False):
         """Return a fresh BGR frame without starting a second SDK camera reader."""
         with self.frame_changed:
             while self.running.is_set() and self.camera_error is None:
                 if check_health is not None:
                     check_health()
-                if self.frame_number > after_number and self.latest_frame is not None:
+                metadata = {"timestamp": self.latest_frame_monotonic,
+                            "generation": self.latest_frame_generation}
+                if (self.frame_number > after_number and self.latest_frame is not None and
+                        self.is_frame_current(metadata)):
                     frame = self.latest_frame
-                    return self.frame_number, frame.copy() if hasattr(frame, "copy") else frame
+                    result = (self.frame_number, frame.copy() if hasattr(frame, "copy") else frame)
+                    return result + (metadata,) if include_metadata else result
                 self.frame_changed.wait(0.1)
         raise MissionStop(self.camera_error or "camera stream stopped during target inspection")
 
@@ -251,11 +315,14 @@ class Dashboard:
 
     def snapshot(self):
         """Build a JSON-friendly snapshot without camera or disk reads."""
+        self._sync_decoder_health()
         with self.frame_changed:
             camera_health = dict(self.camera_health)
             camera_ready = (
                 camera_health["state"] == "ready"
                 and self.latest_frame is not None
+                and self.is_frame_current({"timestamp": self.latest_frame_monotonic,
+                                           "generation": self.latest_frame_generation})
             )
             camera_targets = list(self.camera_targets)
 
@@ -494,6 +561,10 @@ class Dashboard:
         import cv2  # Fail before opening the camera if OpenCV is unavailable.
 
         try:
+            if self.settings.get("camera_backend", "sdk") == "ffmpeg":
+                from src.ffmpeg_camera import FFmpegCamera
+                if not isinstance(self.camera, FFmpegCamera):
+                    self.camera = FFmpegCamera(self.camera, self.settings)
             result = self.camera.start_video_stream(
                 display=False, resolution=self.settings["resolution"]
             )
@@ -530,6 +601,7 @@ class Dashboard:
         if self.camera_started:
             self.camera.stop_video_stream()
             self.camera_started = False
+            self._sync_decoder_health()
         if self.camera_thread is not None:
             self.camera_thread.join(timeout=2)
             self.camera_thread = None

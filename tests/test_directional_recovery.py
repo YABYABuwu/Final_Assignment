@@ -1,4 +1,5 @@
 import itertools
+import math
 import time
 import unittest
 from types import SimpleNamespace
@@ -20,7 +21,8 @@ class DirectionalRecoveryTests(unittest.TestCase):
             self.assertEqual(escape_direction(bits[:2], bits[2:])[0], expected.get(bits, "blocked"))
         self.assertEqual(escape_direction((None, False), (False, False))[0], "waiting_data")
 
-    def simulate(self, clear_at=None, conflict=False, margin=1., stalled=False):
+    def simulate(self, clear_at=None, conflict=False, margin=1., stalled=False,
+                 wait_cycles=0, distance_per_sample=None):
         self.position = [0., 0., 0.]
         self.velocity = [0., 0.]
         self.commands = []
@@ -35,6 +37,8 @@ class DirectionalRecoveryTests(unittest.TestCase):
             self.controller.position_sample_time = self.stamp
             for i in (0,1):
                 d = self.velocity[i] * .1 if not stalled else 0
+                if distance_per_sample is not None and self.velocity[i]:
+                    d = math.copysign(distance_per_sample(), self.velocity[i])
                 self.position[i] += d
                 self.travel += abs(d)
             return tuple(self.position)
@@ -48,7 +52,14 @@ class DirectionalRecoveryTests(unittest.TestCase):
         self.rear.snapshot.side_effect = lambda: snapshot(False)
         self.rear.settings = {"recovery_clear_samples": 2, "recovery_speed_m_s": .08}
         self.guard = Mock()
-        self.guard.clearance.return_value = margin
+        self.guard.motion_interrupted = False
+        self.waited_cycles = 0
+        def clearance(dx, dy):
+            if self.stamp >= 10 and self.waited_cycles < wait_cycles:
+                self.waited_cycles += 1
+                return None
+            return margin
+        self.guard.clearance.side_effect = clearance
         self.guard.owner.settings = {"max_sample_age_s": .5}
         self.guard.owner._gimbal_sample.return_value = (0, 0, time.time())
         logger = Mock()
@@ -57,7 +68,9 @@ class DirectionalRecoveryTests(unittest.TestCase):
             front_ir=self.front, rear_ir=self.rear, get_pose=pose, position_sample_time=0,
             chassis=SimpleNamespace(drive_speed=drive), stop=lambda: drive(0,0,0))
         self.budget = {}
-        with patch("src.directional_recovery.time.sleep"):
+        # Simulated position and command timestamps share one clock.
+        with patch("src.directional_recovery.time.sleep"), \
+                patch("src.directional_recovery.time.time", side_effect=lambda: self.stamp):
             return recover(self.controller, self.rear, "left", .05, None, None, None, self.budget)
 
     def test_left_rear_only_moves_right_and_retargets_from_actual_pose(self):
@@ -81,8 +94,27 @@ class DirectionalRecoveryTests(unittest.TestCase):
             self.assertEqual(self.commands, [])
 
     def test_no_progress_stops(self):
-        with self.assertRaisesRegex(MissionStop, "no progress"):
+        with self.assertRaisesRegex(MissionStop, "20 fresh moving position samples"):
             self.simulate(stalled=True)
+        self.assertEqual(len(self.commands), 21)
+
+    def test_recovery_floor_and_ceiling_are_preserved(self):
+        self.assertTrue(self.simulate(clear_at=.035))
+        for x, y in self.commands:
+            self.assertGreaterEqual(math.hypot(x, y), .03)
+            self.assertLessEqual(math.hypot(x, y), .04)
+
+    def test_waiting_clearance_samples_do_not_consume_progress_window(self):
+        with self.assertRaisesRegex(MissionStop, "20 fresh moving position samples"):
+            self.simulate(stalled=True, wait_cycles=25)
+        self.assertEqual(self.waited_cycles, 25)
+        self.assertGreaterEqual(len(self.commands), 21)
+
+    def test_batched_odometry_progress_is_not_a_stall(self):
+        # Batched updates survive the window even after more than eight
+        # unchanged samples, which the old per-sample rule rejected.
+        increments = itertools.cycle([0.] * 12 + [.003])
+        self.assertTrue(self.simulate(clear_at=.009, distance_per_sample=lambda: next(increments)))
 
     def test_tof_offsets_and_same_direction_reuses_head(self):
         for dx,dy,offset in ((1,0,0),(-1,0,0),(0,1,.05),(0,-1,.06)):

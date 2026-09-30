@@ -56,6 +56,15 @@ def load_config(path=DEFAULT_CONFIG):
     quality = dashboard.get("jpeg_quality")
     if type(quality) is not int or not 1 <= quality <= 100:
         raise ValueError("dashboard.jpeg_quality must be between 1 and 100")
+    if dashboard.get("camera_backend", "sdk") not in ("sdk", "ffmpeg"):
+        raise ValueError("dashboard.camera_backend must be sdk or ffmpeg")
+    ffmpeg = dashboard.get("ffmpeg", {})
+    if not isinstance(ffmpeg, dict) or not isinstance(ffmpeg.get("path", ""), str):
+        raise ValueError("dashboard.ffmpeg must be a mapping with a string path")
+    for name, default in (("stall_timeout_s", 5.0), ("restart_delay_s", .5), ("max_frame_age_s", .5)):
+        value = ffmpeg.get(name, default)
+        if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
+            raise ValueError("dashboard.ffmpeg.{} must be positive and finite".format(name))
 
     image_processing = config["image_processing"]
     if not isinstance(image_processing.get("enabled"), bool):

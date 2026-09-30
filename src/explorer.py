@@ -1,5 +1,6 @@
 """Depth-first frontier traversal over a SLAM occupancy grid."""
 
+import gc
 import heapq
 import math
 import statistics
@@ -1145,6 +1146,9 @@ class DFSExplorer:
                 self.last_ir_lane = {**lane, "status": "confirmed", "target_m": [x, y]}
             self.moves += 1
             self.current_cell = tuple(destination)
+        if not stopped:
+            # move_to has stopped the wheels; collect outside the map lock.
+            gc.collect()
         self._set_status("waiting_slam_scan")
         while True:
             if (self.map.latest_scan_timestamp or 0.0) > previous_scan:

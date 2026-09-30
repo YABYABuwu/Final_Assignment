@@ -31,6 +31,8 @@ test_ir_target_marker.py → confirmed live detection + operator confirmation
 
 ## หน้าที่ของแต่ละส่วน
 
+กล้องใน Dashboard ปัจจุบันใช้ `src/ffmpeg_camera.py`: SDK ส่งคำสั่งเปิดสตรีม TCP แต่ไม่เริ่ม `LiveView` decoder thread; FFmpeg subprocess รับ H.264 และคืน BGR ผ่าน stdout โดยตัวอ่าน Python เก็บภาพล่าสุดเพียงหนึ่งภาพ เมื่อ decoder ตายหรือภาพหยุดมา supervisor restart เฉพาะ FFmpeg ส่วน telemetry, gimbal และ chassis ยังอยู่ใน Process หลัก ภาพที่ส่งให้ระบบเล็งมี timestamp แบบ monotonic และ generation ของ decoder; เมื่อ generation เปลี่ยนจะตรวจผนังเดิมใหม่โดยคงผลยิงที่รับคำสั่งแล้ว ระบบนี้แยก crash ใน decoder แต่ OpenCV detection/JPEG ยังทำงานใน Process หลัก
+
 | ส่วน | หน้าที่และจุดเชื่อม |
 | --- | --- |
 | `config/settings.yaml`, `src/config_loader.py` | ค่าการเชื่อมต่อ, motion/PID, logging, dashboard, image processing, ช่วงสี HSV ใน `color_ranges`, review, mission และการตรวจค่าก่อนต่อหุ่นยนต์ |

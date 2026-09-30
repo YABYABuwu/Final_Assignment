@@ -128,6 +128,7 @@ class IRBumper:
         self.end = end
         self.last_block = None
         self.recovering = None
+        self.recovery_contact_tof = None
         self.events = []
         self._direct_lock = threading.Lock()
         self._direct_cache = None
@@ -195,6 +196,7 @@ class IRBumper:
         sample = self.logger.get_sample("adapter", max_age_s=self.settings["max_age_s"])
         result = {"enabled": True, "state": "ready", "blocked": self.last_block,
                   "recovering": self.recovering,
+                  "recovery_contact_tof": self.recovery_contact_tof,
                   "sides": {}}
         if sample is None:
             result["state"] = "waiting_data"
@@ -317,6 +319,7 @@ class IRBumper:
             "direction": direction if direction != side else None,
             "elapsed_s": round(time.time() - self.logger.start_time, 3),
             "distance_m": round(distance_m, 3), "reason": reason,
+            "contact_tof": self.recovery_contact_tof,
         })
 
 

@@ -648,6 +648,12 @@
             ir.recovering ? ({
               forward: "กำลังเลื่อนหน้า", backward: "กำลังถอยหลัง",
               slide_right: "กำลังสไลด์ขวา", slide_left: "กำลังสไลด์ซ้าย",
+              checking_front_tof: "หยุดล้อ · ตรวจ ToF ด้านหน้าเพื่อเลือกทิศหลบ",
+              checking_rear_tof: "หยุดล้อ · ตรวจ ToF ด้านหลังเพื่อเลือกทิศหลบ",
+              waiting_contact_tof: "หยุดล้อ · รอ ToF ยืนยันด้านที่ IR ตรวจพบ",
+              waiting_clearance: "หยุดล้อ · รอ ToF ตรวจทางที่จะหลบ",
+              waiting_data: "หยุดล้อ · รอข้อมูล IR",
+              recheck_after_four: "ตรวจทางหลบอีกครั้งหลังครบ 4 ก้าว",
               front_right: "กำลังสไลด์ทแยงหน้าขวา", front_left: "กำลังสไลด์ทแยงหน้าซ้าย",
               back_right: "กำลังสไลด์ทแยงหลังขวา", back_left: "กำลังสไลด์ทแยงหลังซ้าย",
             }[ir.recovering] || `กำลังหลบ IR (${ir.recovering})`) :
@@ -672,6 +678,12 @@
           (
             status.camera_health?.skipped_reads
               ? ` · ข้ามการอ่าน ${status.camera_health.skipped_reads} ครั้ง · กลับมารับภาพ ${status.camera_health.recovered_gaps} ครั้ง`
+              : ""
+          ) +
+          (
+            status.camera_health?.backend === "ffmpeg"
+              ? ` · FFmpeg: ${status.camera_health.decoder_state} · restart ${status.camera_health.decoder_restarts || 0}` +
+                (status.camera_health.last_decoder_error ? ` · ล่าสุด: ${status.camera_health.last_decoder_error}` : "")
               : ""
           );
         const detector = status.target_detection;

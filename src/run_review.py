@@ -91,6 +91,14 @@ class RunStore:
                            "message": f"CSV queue dropped {summary['dropped_csv_rows']} rows"})
         
         camera_health = summary.get("camera_health") or {}
+        if camera_health.get("backend") == "ffmpeg":
+            for event in camera_health.get("decoder_events", []):
+                issues.append({"level": "warning", "time_s": None,
+                               "message": "FFmpeg decoder restarted (generation {}): {}".format(
+                                   event.get("generation"), event.get("reason", "unknown"))})
+            if camera_health.get("decoder_state") == "error":
+                issues.append({"level": "error", "time_s": None,
+                               "message": camera_health.get("last_decoder_error") or "FFmpeg camera error"})
 
         if camera_health.get("skipped_reads", 0):
             issues.append({

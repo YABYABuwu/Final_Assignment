@@ -12,7 +12,7 @@ SFX_DIR = Path(__file__).resolve().parent.parent / "sfx"
 
 # ระดับความดังเริ่มต้น (ปรับเพิ่ม/ลดได้ที่นี่):
 # 0.08 = เบาที่สุด, 0.16 = ดังขึ้น 1 ระดับ (ค่าปัจจุบัน), 0.30 = ปานกลาง, 0.50+ = ดัง
-DEFAULT_VOLUME = 0.16
+DEFAULT_VOLUME = 0.45
 
 
 def _get_ffmpeg_exe():

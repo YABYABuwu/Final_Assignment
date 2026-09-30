@@ -43,8 +43,14 @@ dashboard:
   host: 127.0.0.1          # เปิดดูจากคอมที่รันโปรแกรมเท่านั้น
   port: 8000               # URL: http://127.0.0.1:8000
   resolution: 360p         # 360p / 540p / 720p; เริ่มต่ำเพื่อประหยัด Wi-Fi
-  max_fps: 20               # จำนวนภาพ JPEG สูงสุดที่ส่งให้หน้าเว็บต่อวินาที
+  max_fps: 10              # ลดภาระอ่านภาพ/ประมวลผล/JPEG; สูงกว่า detection_fps 8
   jpeg_quality: 60         # 1-100; ค่าสูงใช้แบนด์วิดท์และ CPU มากขึ้น
+  camera_backend: ffmpeg  # decode ใน subprocess; sdk = decoder เดิมที่เคย Access Violation
+  ffmpeg:
+    path: tools/ffmpeg/ffmpeg.exe  # อ้างจากโฟลเดอร์ Final_Assignment
+    stall_timeout_s: 5.0   # restart เฉพาะ decoder เมื่อไม่มีภาพใหม่; ไม่ใช่ timeout การเดิน/gimbal
+    restart_delay_s: 0.5
+    max_frame_age_s: 0.5   # ปฏิเสธภาพค้างก่อนใช้ตรวจ/ยิง
 
 image_processing:
   enabled: true            # ตรวจป้ายสี/รูปทรงจาก camera stream เดียวกับ dashboard
@@ -89,7 +95,7 @@ rear_ir:
   io_read_mode: "auto"
   max_age_s: 0.5
 
-  recovery_speed_m_s: 0.08
+  recovery_speed_m_s: 0.08  # directional ใช้ floor 0.03 และเพดาน 0.04 m/s ภายในค่านี้
   recovery_max_m: 0.02
   recovery_max_attempts: 8
   recovery_total_max_m: 0.16
@@ -115,7 +121,7 @@ front_ir:
   io_read_mode: "auto"
   max_age_s: 0.5
 
-  recovery_speed_m_s: 0.08
+  recovery_speed_m_s: 0.08  # directional ใช้ floor 0.03 และเพดาน 0.04 m/s ภายในค่านี้
   recovery_max_m: 0.02
   recovery_max_attempts: 8
   recovery_total_max_m: 0.16
@@ -159,7 +165,7 @@ exploration:
   heading_source: attitude # อ่าน yaw จาก chassis ตอนเริ่ม DFS แล้วคงเป้าหมายทิศไว้; gimbal ground-relative เคยมีความคลาดสะสม
   wall_threshold_mm: 500 # ToF <= ค่านี้เป็นกำแพง; มากกว่านี้เป็นทางเปิด
   tof_median_window: 1   # ใช้ scan ใหม่ 3 ครั้งหลัง gimbal หยุด แล้วเลือกค่ากลางก่อนตัดสินใจ DFS
-  emergency_stop_distance_m: 0.25 # ระยะกึ่งกลาง chassis ถึงกำแพงที่หยุดระหว่างเดินตามกริด
+  emergency_stop_distance_m: 0.18 # ระยะกึ่งกลาง chassis ถึงกำแพงที่หยุดระหว่างเดินตามกริด
   alignment:
     enabled: true         # จัดตำแหน่งจากกำแพงที่เลือกหลังสแกนครบ 4 ทิศ
     interval_steps: 2      # จัดมุมและจัดกลางที่จุดเริ่ม แล้วทุก 2 ก้าวกริด (รวมทางกลับ)
@@ -215,10 +221,10 @@ exploration:
     camera_hfov_deg: 90.0   # ค่าเริ่มทดลอง ต้องสอบเทียบภาพจริง
     camera_vfov_deg: 60.0
     shots_per_target: 2     # ยิง IR 2 นัดต่อเป้าหมายที่ยืนยันแล้ว
-    fire_settle_s: 1.0      # หน่วงเวลารอให้ยิงครบทุกนัดก่อนกิมบอลขยับ (วินาที)
-    aim_settle_s: 0.45      # หน่วงเวลารอให้ภาพนิ่งหลังกิมบอลขยับก่อนอ่านเฟรม (วินาที)
+    fire_settle_s: 0.30      # หน่วงเวลารอให้ยิงครบทุกนัดก่อนกิมบอลขยับ (วินาที)
+    aim_settle_s: 0.10      # หน่วงเวลารอให้ภาพนิ่งหลังกิมบอลขยับก่อนอ่านเฟรม (วินาที)
     scan_yaw_speed_deg_s: 50 # ความเร็วหมุนกิมบอลไปที่ผนัง (deg/s) ลดลงเพื่อไม่ให้ภาพ/หุ่นสั่น
-    aim_yaw_speed_deg_s: 25  # ความเร็วปรับกิมบอลละเอียดขณะเล็งเป้า (deg/s) ให้นุ่มนวลไม่กระตุก
+    aim_yaw_speed_deg_s: 50  # ความเร็วปรับกิมบอลละเอียดขณะเล็งเป้า (deg/s) ให้นุ่มนวลไม่กระตุก
     search_frames: 5        # จำนวนเฟรมสูงสุดที่สุ่มตรวจหาเป้า (ยืนยันเป้าเมื่อพบต่อเนื่อง >= confirm_frames)
     adaptive_pitch: true    # ปรับมุมก้มอัตโนมัติตามระยะ ToF ถ้าอยู่ใกล้กำแพงเกินไป
     close_range_threshold_mm: 180 # ระยะที่ถือว่าอยู่ใกล้กำแพงมาก (18 ซม.)
@@ -226,10 +232,10 @@ exploration:
     fire_mode: infrared
   map:
     resolution_m: 0.05
-    width_m: 6.0        # ความกว้างสนามตามแกน SDK +X; ลดตามขนาดสนามจริงเพื่อลดจำนวนช่องแผนที่
-    height_m: 6.0       # ความสูงสนามตามแกน SDK +Y
-    start_x_m: 0.3      # ระยะจากขอบ -X ถึงตำแหน่ง SDK (0,0); null = กลางสนาม
-    start_y_m: 0.3      # ระยะจากขอบ -Y ถึงตำแหน่ง SDK (0,0); null = กลางสนาม
+    width_m: 12.0        # ความกว้างสนามตามแกน SDK +X; ลดตามขนาดสนามจริงเพื่อลดจำนวนช่องแผนที่
+    height_m: 12.0       # ความสูงสนามตามแกน SDK +Y
+    start_x_m: null      # ระยะจากขอบ -X ถึงตำแหน่ง SDK (0,0); null = กลางสนาม
+    start_y_m: null      # ระยะจากขอบ -Y ถึงตำแหน่ง SDK (0,0); null = กลางสนาม
     robot_clearance_m: 0.20 # ระยะจากหัว ToF ที่ไม่ทำแผนที่ใต้ตัวหุ่น; ไม่ใช่เกณฑ์รับ/ปฏิเสธค่า
     free_update: -0.40
     occupied_update: 0.85
