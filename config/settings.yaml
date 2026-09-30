@@ -94,7 +94,7 @@ rear_ir:
   recovery_mode: "cardinal" # เดินหน้า/ถอยหลังหลบ IR ซ้าย/ขวาด้วยการสไลด์; ตอนสไลด์เจอ IR หลังให้เดินหน้า
   forward_tof_clear_mm: 250 # ระยะ ToF ด้านหน้าที่ถือว่าโล่งและอนุญาตให้เดินหน้าหลบได้
   forward_tof_max_age_s: 0.5 # ToF ต้องสดไม่เกินค่านี้; หากขาด/invalid ให้หยุดรอ
-  direct_io_fallback: false  # ปิดการยิง get_io synchronous เพื่อไม่ให้ติด timeout ค้าง
+  direct_io_fallback: true  # Confirm suspected DDS contacts with get_io before recovery.
   direct_fallback_cache_s: 0.2 # จำกัดความถี่ synchronous SDK read ไม่ให้รบกวน telemetry
 
 # Front/Rear ใช้ polarity ที่กำหนดคงที่ เพราะปิด auto calibration
@@ -113,7 +113,7 @@ front_ir:
   recovery_total_max_m: 0.24
   recovery_clear_samples: 3
   recovery_mode: "cardinal" # เดินหน้า/ถอยหลังหลบ IR ซ้าย/ขวาด้วยการสไลด์; ตอนสไลด์เจอ IR หน้าให้ถอยหลัง
-  direct_io_fallback: false # ปิดการยิง get_io synchronous เพื่อไม่ให้ติด timeout ค้าง
+  direct_io_fallback: true  # Confirm suspected DDS contacts with get_io before recovery.
   direct_fallback_cache_s: 0.2
 
 mission:

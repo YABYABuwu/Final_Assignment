@@ -120,7 +120,32 @@ class RearIRTests(unittest.TestCase):
         config = load_config()
         for name in ("front_ir", "rear_ir"):
             self.assertEqual(config[name]["io_read_mode"], "auto")
+            self.assertTrue(config[name]["direct_io_fallback"])
             self.assertFalse(config[name]["auto_calibrate_io"])
+
+    def test_default_config_rejects_false_contacts_but_preserves_real_contacts(self):
+        config = load_config()
+        # Reproduce the all-zero IO / live ADC from run 20260930_184350_197709.
+        self.adapter.callback(([0] * 12, [509, 552, 0, 0, 508, 551, 553, 510, 0, 0, 0, 0]))
+        for name, cls, toward in (("front_ir", FrontIRBumper, 0.1),
+                                  ("rear_ir", RearIRBumper, -0.1)):
+            with self.subTest(end=name):
+                settings = config[name]
+                self.adapter.direct_io.clear()
+                bumper = cls(self.logger, settings)
+                self.assertFalse(bumper.blocks_motion(toward, 0, 0))
+                self.assertEqual(bumper.snapshot()["io_source"], "direct_fallback")
+                for side in ("right", "left"):
+                    port = settings[side]
+                    self.adapter.direct_io[(port["id"], port["port"])] = port["active_io"]
+                bumper = cls(self.logger, settings)
+                self.assertTrue(bumper.blocks_motion(toward, 0, 0))
+                self.assertEqual(bumper.last_block, "both")
+                # Missing confirmation must wait, never assume a clear path.
+                self.adapter.direct_io = {key: None for key in self.adapter.direct_io}
+                bumper = cls(self.logger, settings)
+                self.assertTrue(bumper.blocks_motion(toward, 0, 0))
+                self.assertEqual(bumper.last_block, "waiting_data")
 
     def test_recovery_vector_moves_away_from_each_detected_side(self):
         def sides(right, left):
@@ -413,7 +438,20 @@ class RearIRTests(unittest.TestCase):
 
     def test_recovery_distance_limit_advances_to_the_next_attempt(self):
         chassis = ChassisController(self.robot, self.logger, self.config["motion"])
-        chassis.get_pose = lambda: (0.0, 0.0, 0.0)
+        pose = [0.0, 0.0, 0.0]
+        chassis.get_pose = lambda: tuple(pose)
+        original_drive = self.adapter.drive_speed
+
+        def drive(**command):
+            original_drive(**command)
+            pose[0] += command["x"] * 0.01
+            pose[1] += command["y"] * 0.01
+
+        self.adapter.drive_speed = drive
+        original_get_sample = self.logger.get_sample
+        self.logger.get_sample = lambda name, max_age_s=None: (
+            ((300,), time.time()) if name == "tof" else
+            original_get_sample(name, max_age_s=max_age_s))
         events = []
         settings = dict(self.config["rear_ir"], recovery_max_m=0.0001)
         bumper = SimpleNamespace(
