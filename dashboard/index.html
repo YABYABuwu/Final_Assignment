@@ -82,6 +82,7 @@
       <section class="card">
         <div class="card-head"><h2>IR กันชนหน้า</h2><span class="muted">IO · ซ้าย ID 4/2 · ขวา ID 1/1</span></div>
         <div class="map-info"><div>หน้าขวา&nbsp; <strong id="front-ir-right">—</strong></div><div>หน้าซ้าย&nbsp; <strong id="front-ir-left">—</strong></div><div id="front-ir-state">รอข้อมูล IR</div></div>
+        <p id="round2-ir-lane" class="muted" hidden></p>
       </section>
       <section class="card">
         <div class="card-head"><h2>แผนที่ SLAM / DFS</h2><div class="map-actions"><button id="export-json" type="button">ส่งออก JSON</button><button id="export-png" type="button">ส่งออก PNG</button><button id="export-grid-png" type="button">ส่งออก Grid PNG</button><button id="export-ros" type="button">ส่งออก ROS</button><button id="load-map" type="button">เปิด JSON</button><input id="map-file" type="file" accept="application/json,.json" hidden></div></div>
@@ -312,6 +313,7 @@
             : `เป้าหมาย ${(alignment.target_distance_m*100).toFixed(0)} ซม.`;
           const alignmentStatus=alignment.status === "emergency_stop_centered"
             ? `หยุดฉุกเฉินที่ ${(alignment.emergency_center_distance_m*100).toFixed(1)} ซม.; ถือเป็นกลางช่อง`
+            : alignment.status === "retained_ir_lane" ? "คงแนวที่หลบ IR ผ่านแล้ว"
             : alignment.status === "moved" ? `ขยับแล้ว ${alignment.steps ?? 1} ช่วง`
             : alignment.status === "stalled" ? `ปรับแล้วระยะไม่ดีขึ้น: ${alignment.reason}`
             : alignment.status?.startsWith("skipped_") ? `ข้ามการจัดกลางช่อง: ${alignment.reason}`
@@ -327,6 +329,13 @@
         document.getElementById("cell-sides").textContent +=
           ` · ระหว่างเดินหยุดฉุกเฉินที่ ≤${(emergencyLimit*100).toFixed(0)} ซม.`;
       const motionStop=map.exploration?.last_motion_stop;
+      const irLane=map.exploration?.last_ir_lane;
+      if (irLane) {
+        const labels={original:"แนวเดิม",candidate:"ทดลองแนวใหม่",reused:"ใช้แนวที่จำไว้",confirmed:"ผ่านแล้วและจำไว้",blocked:"ทางถูกขวาง",aborted:"ยกเลิกการจำ"};
+        document.getElementById("cell-sides").textContent +=
+          ` · แนว IR ${irLane.cells.map(cell=>cell.join(",")).join(" ↔ ")}: ${labels[irLane.status] || irLane.status}`+
+          ` · เยื้อง X ${(irLane.offset_m[0]*100).toFixed(1)} / Y ${(irLane.offset_m[1]*100).toFixed(1)} ซม. (พิกัดแผนที่)`;
+      }
       if (motionStop?.center_distance_m != null) {
         const stopLabel=motionStop.status === "emergency_stop_centered"
           ? "หยุดฉุกเฉิน · ยืนยันกลางช่องแล้ว" :
@@ -355,6 +364,11 @@
             (latestInspection.targets?.length ? ` · ${latestInspection.targets.map(item=>`${item.color || "—"}/${item.shape || "—"}: ${item.status}${item.shots_requested ? ` ${item.shots_requested} นัด${item.aim_mode === "closest_reachable" ? " (จุดใกล้กลางที่สุด)" : ""}` : ""}`).join(", ")}` : "") : "")
         : "ตรวจเป้าที่กำแพง: ปิด";
       const route = map.trajectory || [];
+      for (const lane of map.exploration?.ir_lanes || []) {
+        const points=lane.anchors_m.map(point=>project(point.map((v,i)=>v+lane.offset_m[i])));
+        ctx.beginPath(); ctx.moveTo(...points[0]); ctx.lineTo(...points[1]);
+        ctx.strokeStyle="#ff73cb"; ctx.lineWidth=3; ctx.stroke();
+      }
       if (route.length) {
         ctx.beginPath();
         route.forEach((point, index) => { const p = project(point); if (!index) ctx.moveTo(...p); else ctx.lineTo(...p); });
@@ -558,6 +572,17 @@
           drawChart(name);
         }
         document.getElementById("mission").textContent = status.mission_status;
+        const round2=status.round2_navigation;
+        const round2Label=document.getElementById("round2-ir-lane");
+        round2Label.hidden = !round2;
+        if (round2) {
+          const lane=round2.last_ir_lane;
+          const labels={original:"แนวเดิม",candidate:"ทดลองแนวใหม่",reused:"ใช้แนวที่จำไว้",confirmed:"ผ่านแล้วและจำไว้",aborted:"ยกเลิกการจำ"};
+          round2Label.textContent=!round2.enabled ? "Round 2: ปิดการจำแนว IR" :
+            `Round 2: จำแนว IR ${round2.ir_lanes.length} ช่วง`+
+            (lane ? ` · ${lane.cells.map(cell=>cell.join(",")).join(" ↔ ")}: ${labels[lane.status] || lane.status}`+
+              ` · เยื้อง X ${(lane.offset_m[0]*100).toFixed(1)} / Y ${(lane.offset_m[1]*100).toFixed(1)} ซม.` : "");
+        }
         for (const [end, ir] of [["rear", status.rear_ir], ["front", status.front_ir]]) {
           const prefix = end === "rear" ? "ir" : "front-ir";
           const name = end === "rear" ? "หลัง" : "หน้า";

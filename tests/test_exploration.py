@@ -105,7 +105,7 @@ class SimulatedChassis:
         self.commands = []
 
     def move_to(self, x, y, yaw=None, abort_event=None, disable_timeout=False,
-                stop_if=None, pause_if=None):
+                stop_if=None, pause_if=None, on_ir_recovered=None):
         if abort_event is not None and abort_event.is_set():
             raise MissionStop("simulated motion aborted")
         if stop_if is not None and stop_if(tuple(self.slam_map.pose)):
@@ -125,6 +125,157 @@ class SimulatedChassis:
 
 
 class ExplorationTests(unittest.TestCase):
+    def make_ir_lane_explorer(self, yaw=0.0):
+        settings = copy.deepcopy(self.settings)
+        settings["ir_lane"] = {"enabled": True, "min_shift_m": .005, "max_offset_m": .10}
+        slam_map = OccupancyGridSLAM(settings)
+        slam_map.update((0, 0, yaw), self.ranges, timestamp=time.time())
+        logger = FakeLogger()
+        logger.set("attitude", (yaw, 0, 0))
+        gimbal = SimulatedGimbal(slam_map, logger, self.ranges)
+
+        class RecoveringChassis(SimulatedChassis):
+            recoveries = ()
+            fail = False
+            emergency = False
+
+            def move_to(self, x, y, yaw=None, on_ir_recovered=None, **kwargs):
+                for before, after in self.recoveries:
+                    if on_ir_recovered:
+                        replacement = on_ir_recovered(before, after, (x, y))
+                        if replacement is not None:
+                            x, y = replacement
+                if self.fail:
+                    raise MissionStop("simulated failed traversal")
+                if self.emergency:
+                    pose = (x * .75, y, yaw)
+                    stamp = time.time()
+                    self.logger.set("tof", (50,), stamp)
+                    self.logger.set("gimbal", (self.gimbal.pitch, self.gimbal.yaw, 0, 0), stamp)
+                    if kwargs["stop_if"](pose):
+                        self.slam_map.latest_scan_timestamp = stamp + 1
+                        return pose
+                return super().move_to(x, y, yaw=yaw, **kwargs)
+
+        chassis = RecoveringChassis(slam_map, logger, gimbal, self.ranges)
+        explorer = DFSExplorer(chassis, gimbal, logger, slam_map, settings)
+        explorer.base_pose = (0, 0, yaw)
+        explorer.cell_targets[(0, 0)] = (0, 0)
+        explorer.slam_worker = FakeSlamWorker()
+        return explorer, chassis
+
+    def test_ir_lane_retargets_and_reuses_same_world_offset_on_return(self):
+        explorer, chassis = self.make_ir_lane_explorer()
+        chassis.recoveries = [((.2, 0, 0), (.2, .03, 0))]
+        self.assertTrue(explorer._move((1, 0)))
+        self.assertAlmostEqual(chassis.commands[-1][1], .03)
+        self.assertEqual(explorer.cell_targets[(1, 0)], (.6, 0))
+        self.assertEqual(explorer.last_ir_lane["status"], "confirmed")
+        # Centering must not immediately undo a successful IR correction.
+        explorer._align_cell((1, 0))
+        self.assertEqual(explorer.alignments[(1, 0)]["status"], "retained_ir_lane")
+        chassis.recoveries = []
+        self.assertTrue(explorer._move((0, 0)))
+        self.assertEqual(chassis.commands[-1][:2], (0, .03))
+        self.assertTrue(explorer._move((1, 0)))
+        self.assertEqual(chassis.commands[-1][:2], (.6, .03))
+        self.assertEqual(len(explorer.ir_lanes), 1)
+        self.assertEqual(explorer.snapshot()["ir_lanes"][0]["offset_m"], [0, .03])
+        # An unrelated edge must retain its original target.
+        self.assertTrue(explorer._move((1, 1)))
+        self.assertEqual(chassis.commands[-1][:2], (.6, .6))
+
+    def test_ir_lane_uses_rotated_map_axes_not_body_right(self):
+        explorer, chassis = self.make_ir_lane_explorer(yaw=90)
+        chassis.recoveries = [((0, .2, 90), (-.03, .2, 90))]
+        explorer._move((1, 0))
+        self.assertAlmostEqual(chassis.commands[-1][0], -.03)
+        self.assertAlmostEqual(chassis.commands[-1][1], .6)
+        chassis.recoveries = []
+        explorer._move((0, 0))
+        self.assertAlmostEqual(chassis.commands[-1][0], -.03)
+        self.assertAlmostEqual(chassis.commands[-1][1], 0)
+
+    def test_ir_lane_return_stays_parallel_when_cell_centers_differ(self):
+        explorer, chassis = self.make_ir_lane_explorer()
+        explorer.cell_targets[(1, 0)] = (.6, .02)
+        chassis.recoveries = [((.2, .02, 0), (.2, .05, 0))]
+        explorer._move((1, 0))
+        chassis.recoveries = []
+        explorer._move((0, 0))
+        self.assertAlmostEqual(chassis.commands[-1][1], .05)
+        self.assertEqual(explorer.cell_targets[(0, 0)], (0, 0))
+
+    def test_ir_lane_ignores_longitudinal_and_tiny_recovery(self):
+        explorer, chassis = self.make_ir_lane_explorer()
+        chassis.recoveries = [((.2, 0, 0), (.17, .002, 0))]
+        explorer._move((1, 0))
+        self.assertEqual(chassis.commands[-1][:2], (.6, 0))
+        self.assertFalse(explorer.ir_lanes)
+
+    def test_ir_lane_offset_is_absolute_and_cannot_accumulate_past_limit(self):
+        explorer, chassis = self.make_ir_lane_explorer()
+        chassis.recoveries = [((.2, 0, 0), (.2, .03, 0)),
+                              ((.3, .03, 0), (.3, .05, 0))]
+        explorer._move((1, 0))
+        self.assertAlmostEqual(chassis.commands[-1][1], .05)
+        chassis.recoveries = [((.3, .05, 0), (.3, .11, 0))]
+        with self.assertRaisesRegex(MissionStop, "offset or map limit"):
+            explorer._move((0, 0))
+        self.assertFalse(explorer.ir_lanes)
+        self.assertEqual(explorer.last_ir_lane["status"], "aborted")
+
+    def test_ir_lane_failed_or_emergency_traversal_is_not_saved(self):
+        for failure in ("fail", "emergency"):
+            with self.subTest(failure=failure):
+                explorer, chassis = self.make_ir_lane_explorer()
+                chassis.recoveries = [((.2, 0, 0), (.2, .03, 0))]
+                setattr(chassis, failure, True)
+                if failure == "fail":
+                    with self.assertRaises(MissionStop):
+                        explorer._move((1, 0))
+                else:
+                    explorer._move((1, 0))
+                self.assertFalse(explorer.ir_lanes)
+                self.assertIn(explorer.last_ir_lane["status"], ("aborted", "blocked"))
+
+    def test_ir_lane_reuse_still_checks_new_obstacle(self):
+        explorer, chassis = self.make_ir_lane_explorer()
+        chassis.recoveries = [((.2, 0, 0), (.2, .03, 0))]
+        explorer._move((1, 0))
+        count = len(chassis.commands)
+        explorer._scan_for_direction = lambda delta: (50, 180)
+        self.assertFalse(explorer._move((0, 0)))
+        self.assertEqual(len(chassis.commands), count)
+        self.assertFalse(explorer.ir_lanes)
+
+    def test_ir_lane_can_be_disabled(self):
+        explorer, chassis = self.make_ir_lane_explorer()
+        explorer.settings["ir_lane"]["enabled"] = False
+        chassis.recoveries = [((.2, 0, 0), (.2, .03, 0))]
+        explorer._move((1, 0))
+        self.assertEqual(chassis.commands[-1][:2], (.6, 0))
+        self.assertFalse(explorer.ir_lanes)
+
+    def test_ir_lane_config_rejects_invalid_bounds(self):
+        import yaml
+        for value in (0, -.1, float("nan"), True, .3):
+            with self.subTest(max_offset_m=value), tempfile.TemporaryDirectory() as temp:
+                config = copy.deepcopy(self.config)
+                config["exploration"]["ir_lane"]["max_offset_m"] = value
+                path = Path(temp) / "settings.yaml"
+                path.write_text(yaml.safe_dump(config), encoding="utf-8")
+                with self.assertRaises(ValueError):
+                    load_config(path)
+
+    def test_ir_lane_correction_cannot_leave_map(self):
+        explorer, chassis = self.make_ir_lane_explorer()
+        explorer.map.contains_world = lambda x, y: y <= .02
+        chassis.recoveries = [((.2, 0, 0), (.2, .03, 0))]
+        with self.assertRaisesRegex(MissionStop, "offset or map limit"):
+            explorer._move((1, 0))
+        self.assertFalse(explorer.ir_lanes)
+
     def setUp(self):
         self.config = load_config()
         self.settings = copy.deepcopy(self.config["exploration"])
@@ -488,7 +639,7 @@ class ExplorationTests(unittest.TestCase):
                 self.previous_scan_count = 0
 
             def move_to(self, x, y, yaw=None, abort_event=None,
-                        disable_timeout=False, stop_if=None, pause_if=None):
+                        disable_timeout=False, stop_if=None, pause_if=None, on_ir_recovered=None):
                 new_scans = self.gimbal.commands[self.previous_scan_count:]
                 if not self.commands:
                     self_test.assertEqual([round(command[1]) for command in new_scans[1:5]],

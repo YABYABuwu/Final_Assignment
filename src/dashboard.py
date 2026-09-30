@@ -154,6 +154,7 @@ class Dashboard:
             "target_detection": target_detection,
             "camera_error": self.camera_error,
             "mission_status": self.mission_status,
+            "round2_navigation": getattr(self.logger, "round2_navigation", None),
             "motion_settings": self.motion_settings,
             "rear_ir": self.rear_ir.snapshot() if self.rear_ir is not None else {"enabled": False},
             "front_ir": self.front_ir.snapshot() if self.front_ir is not None else {"enabled": False},

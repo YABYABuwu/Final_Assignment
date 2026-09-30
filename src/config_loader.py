@@ -1,5 +1,6 @@
 from pathlib import Path
 import math
+from statistics import mode
 
 import yaml
 
@@ -187,19 +188,38 @@ def load_config(path=DEFAULT_CONFIG):
                 ir["recovery_speed_m_s"] > exploration_speed):
             raise ValueError(f"{key}.recovery_speed_m_s cannot exceed exploration.max_speed_m_s")
         step_m = config["exploration"].get("step_m")
-        if (type(step_m) in (int, float) and math.isfinite(step_m) and
-                total_max_m >= step_m / 2):
+        if (
+            type(step_m) in (int, float)
+            and math.isfinite(step_m)
+            and total_max_m >= step_m
+        ):
             raise ValueError(
-                f"{key}.recovery_total_max_m must be below half an exploration step"
+                f"{key}.recovery_total_max_m "
+                "must be below one exploration step"
             )
         clear_samples = ir.get("recovery_clear_samples")
         if type(clear_samples) is not int or not 1 <= clear_samples <= 20:
             raise ValueError(f"{key}.recovery_clear_samples must be an integer from 1 to 20")
+
         mode = ir.get("recovery_mode")
-        if mode is not None and mode not in ("cardinal", "diagonal", "forward_first", "staged"):
+
+        allowed_recovery_modes = (
+            "adaptive",
+            "cardinal",
+            "diagonal",
+            "forward_first",
+            "staged",
+        )
+
+        if (
+            mode is not None
+            and mode not in allowed_recovery_modes
+        ):
             raise ValueError(
-                f"{key}.recovery_mode must be cardinal, diagonal, forward_first, or staged"
+                f"{key}.recovery_mode must be adaptive, cardinal, "
+                "diagonal, forward_first, or staged"
             )
+
         tof_clear = ir.get("forward_tof_clear_mm")
         if tof_clear is not None and (type(tof_clear) not in (int, float) or not math.isfinite(tof_clear) or tof_clear <= 0):
             raise ValueError(f"{key}.forward_tof_clear_mm must be a positive number")
@@ -248,6 +268,16 @@ def load_config(path=DEFAULT_CONFIG):
             raise ValueError(f"exploration.{name} must be a positive number")
     if exploration["sample_skew_s"] > exploration["max_sample_age_s"]:
         raise ValueError("exploration.sample_skew_s cannot exceed max_sample_age_s")
+    lane = exploration.setdefault("ir_lane", {
+        "enabled": False, "min_shift_m": 0.005, "max_offset_m": 0.10})
+    if not isinstance(lane, dict) or type(lane.get("enabled")) is not bool:
+        raise ValueError("exploration.ir_lane.enabled must be true or false")
+    for name in ("min_shift_m", "max_offset_m"):
+        value = lane.get(name)
+        if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
+            raise ValueError("exploration.ir_lane.{} must be positive and finite".format(name))
+    if not lane["min_shift_m"] < lane["max_offset_m"] < exploration["step_m"] / 2:
+        raise ValueError("IR lane needs min_shift_m < max_offset_m < half a grid step")
     if exploration["update_hz"] > 50:
         raise ValueError("exploration.update_hz cannot exceed 50 Hz")
     median_window = exploration.get("tof_median_window")

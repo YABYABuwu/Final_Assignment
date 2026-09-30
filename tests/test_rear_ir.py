@@ -359,6 +359,67 @@ class RearIRTests(unittest.TestCase):
         self.assertEqual(recovery_vector(front.snapshot()["sides"], .08, attempt=2,
                                          end="front"), ("backward", -.08, 0.0))
 
+    def test_controller_uses_retarget_after_cleared_ir_and_keeps_stop_monitor(self):
+        motion = dict(self.config["motion"], control_period_s=.001)
+        chassis = ChassisController(self.robot, self.logger, motion)
+        pose = [0.0, 0.0, 0.0]
+        chassis.get_pose = lambda: tuple(pose)
+        bumper = SimpleNamespace(end="front", last_block="left",
+                                 settings={"recovery_max_attempts": 3},
+                                 blocks_motion=lambda x, y, z: pose[1] == 0)
+        chassis.front_ir = bumper
+        callbacks, monitors = [], []
+
+        def recover(*args, **kwargs):
+            pose[1] = .03
+            kwargs["recovery_budget"]["cleared_pose"] = tuple(pose)
+            return True
+
+        def retarget(before, after, target):
+            callbacks.append((before, after, target))
+            return target[0], after[1]
+
+        def stop_if(current):
+            monitors.append(current)
+            return any(command["x"] > 0 for command in self.adapter.commands)
+
+        chassis._recover_from_ir = recover
+        chassis.move_to(.6, 0, yaw=0, timeout_s=.2,
+                        on_ir_recovered=retarget, stop_if=stop_if)
+        self.assertEqual(callbacks, [((0, 0, 0), (0, .03, 0), (.6, 0))])
+        forward = [command for command in self.adapter.commands if command["x"] > 0]
+        self.assertTrue(forward)
+        self.assertTrue(all(command["y"] == 0 for command in forward))
+        self.assertIn((0, .03, 0), monitors)
+        self.assertEqual(self.adapter.commands[-1], {"x": 0, "y": 0, "z": 0})
+
+    def test_retarget_measures_the_whole_recovery_episode_across_attempts(self):
+        chassis = ChassisController(self.robot, self.logger,
+                                    dict(self.config["motion"], control_period_s=.001))
+        pose = [0.0, 0.0, 0.0]
+        chassis.get_pose = lambda: tuple(pose)
+        chassis.front_ir = SimpleNamespace(
+            end="front", last_block="left", settings={"recovery_max_attempts": 3},
+            blocks_motion=lambda *args: True)
+        seen = []
+
+        def recover(*args, **kwargs):
+            pose[1] += .02
+            if args[2] == 2:
+                kwargs["recovery_budget"]["cleared_pose"] = tuple(pose)
+                return True
+            return False
+
+        def retarget(before, after, target):
+            seen.append((before, after))
+            raise MissionStop("captured episode")
+
+        chassis._recover_from_ir = recover
+        with self.assertRaisesRegex(MissionStop, "captured episode"):
+            chassis.move_to(.6, 0, timeout_s=.2, on_ir_recovered=retarget)
+        self.assertEqual(seen, [((0, 0, 0), (0, .04, 0))])
+        self.assertEqual(self.adapter.commands[-1], {"x": 0, "y": 0, "z": 0})
+
     def test_front_recovery_stops_when_rear_ir_blocks_escape(self):
         settings = self.config["front_ir"].copy()
         settings["right"] = {"id": 3, "port": 1, "active_io": 1}

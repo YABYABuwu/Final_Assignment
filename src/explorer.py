@@ -7,6 +7,7 @@ import time
 
 from src.slam import CellWallGrid, _wrap_degrees
 from src.mission_stop import MissionStop
+from src.ir_lane import prepare_lane, retarget_lane
 
 
 class DFSExplorer:
@@ -29,6 +30,8 @@ class DFSExplorer:
         self.base_pose = None
         self.current_cell = (0, 0)
         self.cell_targets = {}
+        self.ir_lanes = {}
+        self.last_ir_lane = None
         self.alignments = {}
         self.heading_alignments = {}
         self.last_heading_alignment = None
@@ -63,6 +66,8 @@ class DFSExplorer:
                                  for node in self.stack]
                 if self.base_pose is not None else [],
                 "moves": self.moves,
+                "ir_lanes": [dict(value) for _, value in sorted(self.ir_lanes.items())],
+                "last_ir_lane": dict(self.last_ir_lane) if self.last_ir_lane else None,
                 "heading_source": self.settings["heading_source"],
                 "travel_heading_deg": self.travel_heading_deg,
                 "gimbal_pitch_frame": "chassis",
@@ -151,7 +156,7 @@ class DFSExplorer:
             return yaw if math.isfinite(yaw) else None
         return self._wait_for_fresh(read_attitude_yaw)
 
-    def _drive_holding_current_yaw(self, x, y, kind, stop_if=None):
+    def _drive_holding_current_yaw(self, x, y, kind, stop_if=None, on_ir_recovered=None):
         """Keep the initial DFS heading while checking fresh yaw before each move."""
         observed_yaw = self._current_yaw()
         with self.lock:
@@ -169,6 +174,8 @@ class DFSExplorer:
                    "pause_if": lambda: self.slam_worker.status().get("waiting_telemetry", False)}
         if stop_if is not None:
             options["stop_if"] = stop_if
+        if on_ir_recovered is not None:
+            options["on_ir_recovered"] = on_ir_recovered
         return self.chassis.move_to(x, y, **options)
 
     def _motion_pose(self):
@@ -561,6 +568,10 @@ class DFSExplorer:
             self.map.set_exploration_state(self.snapshot())
 
         desired = self.settings["alignment"]["wall_distance_m"]
+        if (self.last_ir_lane and self.last_ir_lane["status"] == "confirmed" and
+                node == self.current_cell and list(node) in self.last_ir_lane["cells"]):
+            skip("retained_ir_lane", "Keep the confirmed local IR lane instead of recentering")
+            return
         tolerance = self.settings["alignment"]["tolerance_m"]
         max_shift = self.settings["alignment"]["max_shift_m"]
         walls = {}
@@ -872,7 +883,40 @@ class DFSExplorer:
         delta = (destination[0] - source[0], destination[1] - source[1])
         if delta not in self.DIRECTIONS:
             raise ValueError("grid movement needs an adjacent destination")
+        lane_settings = self.settings.get("ir_lane", {})
+        lane_enabled = lane_settings.get("enabled", False)
+        edge = tuple(sorted((source, tuple(destination))))
+        saved_lane = self.ir_lanes.get(edge) if lane_enabled else None
+        # Anchors belong to this edge only. Never translate cell_targets or the
+        # grid origin, which would propagate a local correction to other edges.
+        _, lane, normal, destination_index, lane_target = prepare_lane(
+            source, destination,
+            {node: self.cell_targets.get(node, self._to_map(node)) for node in edge},
+            self.base_pose[2], saved_lane)
+        if saved_lane:
+            target = lane_target
+        candidate_changed = False
+
+        def retarget_after_ir(before, after, old_target):
+            nonlocal x, y, candidate_changed, lane
+            correction = retarget_lane(lane, normal, destination_index, before, after,
+                                       lane_settings, self.map.contains_world)
+            if correction is None:
+                return None
+            lane, shifted = correction
+            candidate_changed = True
+            x, y = shifted
+            with self.lock:
+                self.last_ir_lane = {**lane, "status": "candidate", "target_m": [x, y]}
+                self.last_motion_heading["target_m"] = [x, y]
+            self.map.set_exploration_state(self.snapshot())
+            return shifted
+
         x, y = target
+        if lane_enabled:
+            with self.lock:
+                self.last_ir_lane = {**lane, "status": "reused" if saved_lane else "original",
+                                     "target_m": [x, y]}
         if not self.map.contains_world(x, y):
             raise MissionStop(f"grid target for {destination} is outside the SLAM map")
         # A return to a visited cell needs one fresh scan in the travel
@@ -887,6 +931,9 @@ class DFSExplorer:
         emergency_distance = self.settings["emergency_stop_distance_m"]
         if measured_mm <= self.settings["wall_threshold_mm"]:
             with self.lock:
+                if lane_enabled:
+                    self.ir_lanes.pop(edge, None)
+                    self.last_ir_lane = {**self.last_ir_lane, "status": "blocked"}
                 self.wall_grid.observe(source, delta, distance, measured_mm,
                                        self.settings["wall_threshold_mm"],
                                        self.map.latest_scan_timestamp)
@@ -974,7 +1021,17 @@ class DFSExplorer:
 
         previous_scan = self.map.latest_scan_timestamp or 0.0
         previous_status = self.status
-        pose = self._drive_holding_current_yaw(x, y, kind="grid_step", stop_if=stop_if)
+        try:
+            pose = self._drive_holding_current_yaw(
+                x, y, kind="grid_step", stop_if=stop_if,
+                on_ir_recovered=retarget_after_ir if lane_enabled else None)
+        except Exception:
+            if lane_enabled:
+                with self.lock:
+                    self.ir_lanes.pop(edge, None)
+                    self.last_ir_lane = {**self.last_ir_lane, "status": "aborted"}
+                self.map.set_exploration_state(self.snapshot())
+            raise
         entered = True
         if stopped:
             path_x, path_y = x - start_pose[0], y - start_pose[1]
@@ -984,6 +1041,9 @@ class DFSExplorer:
             entered = progress >= path_length / 2.0
             center_cell = tuple(destination) if entered else source
             with self.lock:
+                if lane_enabled:
+                    self.ir_lanes.pop(edge, None)
+                    self.last_ir_lane = {**self.last_ir_lane, "status": "blocked"}
                 center_result = self._assess_stopped_center(
                     center_cell, pose, stopped["center_distance_m"])
                 if not entered and tuple(destination) not in self.visited:
@@ -1010,6 +1070,9 @@ class DFSExplorer:
             if not entered:
                 return False
         with self.lock:
+            if lane_enabled and not stopped and (candidate_changed or saved_lane):
+                self.ir_lanes[edge] = dict(lane)
+                self.last_ir_lane = {**lane, "status": "confirmed", "target_m": [x, y]}
             self.moves += 1
             self.current_cell = tuple(destination)
         self._set_status("waiting_slam_scan")

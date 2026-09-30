@@ -46,6 +46,15 @@ def recovery_vector(sides, speed, attempt=1, end="rear", mode="staged",
 
     diag = speed / math.sqrt(2.0)
 
+    if mode == "adaptive":
+        # Every third attempt prefers a diagonal escape when clear.
+        # ChassisController still checks each candidate direction.
+        if attempt % 3 == 0 and forward_clear:
+            mode = "diagonal"
+            attempt = 1
+        else:
+            mode = "cardinal"
+
     # Both sides blocked: escape purely longitudinally
     if right and left:
         if mode == "cardinal" and not forward_clear:

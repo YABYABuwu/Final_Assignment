@@ -204,6 +204,7 @@ def main():
     from src.gimbal_control import ChassisRelativeGimbal
     from src.logger import SensorLogger
     from src.rear_ir import RearIRBumper, FrontIRBumper
+    from src.round2_navigation import Round2Navigator
     from src.target_marker import fire_infrared
 
     def sdk_conn_type(name):
@@ -236,8 +237,12 @@ def main():
         chassis = ChassisController(ep_robot, logger, motion_settings)
         if config["rear_ir"]["enabled"]:
             chassis.rear_ir = RearIRBumper(logger, config["rear_ir"])
+            logger.rear_ir_settings = config["rear_ir"]
+            logger.rear_ir_recoveries = chassis.rear_ir.events
         if config["front_ir"]["enabled"]:
             chassis.front_ir = FrontIRBumper(logger, config["front_ir"])
+            logger.front_ir_settings = config["front_ir"]
+            logger.front_ir_recoveries = chassis.front_ir.events
 
         gimbal = ChassisRelativeGimbal(ep_robot.gimbal)
         _recenter_action = gimbal.recenter()
@@ -261,6 +266,7 @@ def main():
             target_settings=config["exploration"]["target_inspection"],
             color_ranges=config["color_ranges"],
             motion_settings=logger.motion_settings,
+            rear_ir=chassis.rear_ir, front_ir=chassis.front_ir,
         )
         dashboard.start()
         host = config["dashboard"]["host"]
@@ -300,14 +306,24 @@ def main():
 
         start_map_x, start_map_y = grid_map.cell_to_world(start_cell)
         init_pose = chassis.get_pose()
-        robot_origin_x = float(init_pose[0]) if init_pose else 0.0
-        robot_origin_y = float(init_pose[1]) if init_pose else 0.0
+        while init_pose is None:
+            chassis.stop()
+            dashboard.mission_status = "Round 2: waiting for fresh pose"
+            time.sleep(.05)
+            init_pose = chassis.get_pose()
+        robot_origin_x = float(init_pose[0])
+        robot_origin_y = float(init_pose[1])
+        navigator = Round2Navigator(
+            chassis, grid_map, config["exploration"]["ir_lane"],
+            (robot_origin_x - start_map_x, robot_origin_y - start_map_y),
+            on_change=lambda state: setattr(logger, "round2_navigation", state))
         # Read actual chassis heading at startup — must not default to 0.0 because
         # the map base_pose yaw (~97°) means the grid axes are rotated relative to
         # the robot's odometry frame. Using 0.0 causes every gimbal angle to be
         # off by ~97°, making T1/T3 miss and T2 accidentally hit the wrong target.
         body_yaw = float(init_pose[2]) if init_pose and len(init_pose) >= 3 else 0.0
         for step_idx, cell in enumerate(plan["full_path"]):
+            dashboard.mission_status = "Round 2: moving to {}".format(cell)
             world_x, world_y = plan["waypoints"][step_idx]
             # Map waypoints relative to the starting cell position on the floor
             target_x = robot_origin_x + (world_x - start_map_x)
@@ -320,7 +336,8 @@ def main():
                 print(f"  -> Already at start standpoint {cell}; skipping initial motion.")
                 pose = curr_pose
             else:
-                pose = chassis.move_to(target_x, target_y, yaw=None)
+                source = plan["full_path"][step_idx - 1] if step_idx else None
+                pose = navigator.move_to(source, cell, (target_x, target_y))
             if pose is not None and len(pose) >= 3:
                 body_yaw = float(pose[2])
 
@@ -352,6 +369,8 @@ def main():
                     print(f"  -> Inspection result for {target_id}: {result.get('status')} targets={result.get('targets')}")
 
         elapsed = time.time() - start_time
+        logger.run_status = "completed"
+        dashboard.mission_status = "Round 2: completed"
         print(f"\n=== Round 2 Complete! Elapsed Time: {elapsed:.1f} s ({elapsed/60:.2f} min) ===")
         if elapsed <= 300:
             print("Successfully completed within the 5-minute requirement!")
@@ -359,8 +378,12 @@ def main():
             print("Warning: Exceeded the 5-minute limit.")
 
     except KeyboardInterrupt:
+        if logger is not None:
+            logger.run_status, logger.run_error = "stopped", "Interrupted by user"
         print("\nInterrupted by user.")
-    except MissionStop as err:
+    except (MissionStop, TimeoutError) as err:
+        if logger is not None:
+            logger.run_status, logger.run_error = "stopped", str(err)
         print(f"\nMission stopped: {err}")
     finally:
         try:

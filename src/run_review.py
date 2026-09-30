@@ -100,6 +100,16 @@ class RunStore:
                 issues.append({"level": "warning", "time_s": None,
                                "message": f"Wall heading {cell}: {alignment.get('reason') or alignment['status']}"})
         motion_stop = (summary.get("exploration") or {}).get("last_motion_stop") or {}
+        lane = (summary.get("exploration") or {}).get("last_ir_lane") or {}
+        round2_lane = (summary.get("round2_navigation") or {}).get("last_ir_lane") or {}
+        if round2_lane.get("status") == "aborted":
+            issues.append({"level": "warning", "time_s": None,
+                           "message": "Round 2 IR lane {}: aborted (not retained)".format(
+                               round2_lane.get("cells"))})
+        if lane.get("status") in ("blocked", "aborted"):
+            issues.append({"level": "warning", "time_s": None,
+                           "message": "IR lane {}: {} (not retained)".format(
+                               lane.get("cells"), lane["status"])})
         if motion_stop.get("center_confirmed") is False:
             issues.append({"level": "warning", "time_s": None,
                            "message": "Emergency stop at cell {} was {:.3f} m from planned center".format(

@@ -15,6 +15,22 @@ def write_csv(path, columns, rows):
 
 
 class ReviewTests(unittest.TestCase):
+    def test_ir_lane_summary_is_preserved_and_failed_lane_is_visible(self):
+        with tempfile.TemporaryDirectory() as temp:
+            run_dir = Path(temp) / "lane"
+            run_dir.mkdir()
+            exploration = {
+                "ir_lanes": [{"cells": [[0, 0], [1, 0]],
+                              "anchors_m": [[0, 0], [.6, 0]], "offset_m": [0, .03]}],
+                "last_ir_lane": {"cells": [[1, 0], [2, 0]], "status": "aborted"},
+            }
+            (run_dir / "run_summary.json").write_text(
+                json.dumps({"exploration": exploration}), encoding="utf-8")
+            run = RunStore(temp).load_run("lane")
+            self.assertEqual(run["summary"]["exploration"], exploration)
+            self.assertTrue(any("IR lane" in issue["message"] and "not retained" in issue["message"]
+                                for issue in run["issues"]))
+
     def test_parse_value_supports_sdk_arrays(self):
         self.assertEqual(parse_value("(1, 2, 3)"), [1.0, 2.0, 3.0])
         self.assertEqual(parse_value("True"), 1)

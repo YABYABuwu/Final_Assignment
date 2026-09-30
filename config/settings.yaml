@@ -79,40 +79,49 @@ review:
 
 rear_ir:
   enabled: true
-  right: {id: 3, port: 2, active_io: 0} # หลังขวา: io_6; active_io เป็น fallback หากปิด auto calibration
-  left: {id: 4, port: 1, active_io: 0}  # หลังซ้าย: io_7; active_io เป็น fallback หากปิด auto calibration
-  auto_calibrate_io: false # ปิดไว้เพื่อใช้ active_io ของแต่ละ sensor แบบคงที่
-  calibration_samples: 10 # ใช้เฉพาะเมื่อเปิด auto_calibrate_io
-  calibration_min_consistency: 0.8 # ใช้เฉพาะเมื่อเปิด auto_calibrate_io
-  io_read_mode: "auto" # ใช้ DDS stream ปกติ และ fallback ไป get_io(ID, Port) เมื่อ stream ผิดปกติ
-  max_age_s: 0.5          # ข้อมูลเก่ากว่านี้หยุดการถอย/สไลด์/หมุนจนได้ค่าใหม่
-  recovery_speed_m_s: 0.08 # ความเร็วหลบ IR
-  recovery_max_m: 0.08    # ขยับหลบทีละไม่เกิน 8 cm ต่อ attempt (ให้พ้นกรวย IR ในครั้งเดียว)
-  recovery_max_attempts: 8 # สลับสองทิศทางสูงสุดทิศละ 4 ครั้ง
-  recovery_total_max_m: 0.24 # ระยะหลบสะสมสูงสุดก่อนหยุด mission
-  recovery_clear_samples: 3 # ต้องเห็น IO ว่างจาก callback ใหม่ต่อเนื่องก่อนเดินต่อ
-  recovery_mode: "cardinal" # เดินหน้า/ถอยหลังหลบ IR ซ้าย/ขวาด้วยการสไลด์; ตอนสไลด์เจอ IR หลังให้เดินหน้า
-  forward_tof_clear_mm: 250 # ระยะ ToF ด้านหน้าที่ถือว่าโล่งและอนุญาตให้เดินหน้าหลบได้
-  forward_tof_max_age_s: 0.5 # ToF ต้องสดไม่เกินค่านี้; หากขาด/invalid ให้หยุดรอ
+  right: {id: 3, port: 2, active_io: 0}
+  left: {id: 4, port: 1, active_io: 0}
+
+  auto_calibrate_io: false
+  calibration_samples: 10
+  calibration_min_consistency: 0.8
+
+  io_read_mode: "auto"
+  max_age_s: 0.5
+
+  recovery_speed_m_s: 0.08
+  recovery_max_m: 0.08
+  recovery_max_attempts: 8
+  recovery_total_max_m: 0.45
+  recovery_clear_samples: 3
+  recovery_mode: "adaptive"
+
+  forward_tof_clear_mm: 250
+  forward_tof_max_age_s: 0.5
+
   direct_io_fallback: true  # Confirm suspected DDS contacts with get_io before recovery.
-  direct_fallback_cache_s: 0.2 # จำกัดความถี่ synchronous SDK read ไม่ให้รบกวน telemetry
+  direct_fallback_cache_s: 0.2
 
 # Front/Rear ใช้ polarity ที่กำหนดคงที่ เพราะปิด auto calibration
 front_ir:
   enabled: true
-  right: {id: 1, port: 1, active_io: 0} # หน้าขวา: io_1; fallback
-  left: {id: 4, port: 2, active_io: 0}  # หน้าซ้าย: io_8; fallback
-  auto_calibrate_io: false # ปิดไว้เพื่อใช้ active_io ของแต่ละ sensor แบบคงที่
-  calibration_samples: 10 # ใช้เฉพาะเมื่อเปิด auto_calibrate_io
-  calibration_min_consistency: 0.8 # ใช้เฉพาะเมื่อเปิด auto_calibrate_io
-  io_read_mode: "auto" # ใช้ DDS stream ปกติ และ fallback ไป get_io(ID, Port) เมื่อ stream ผิดปกติ
+  right: {id: 1, port: 1, active_io: 0}
+  left: {id: 4, port: 2, active_io: 0}
+
+  auto_calibrate_io: false
+  calibration_samples: 10
+  calibration_min_consistency: 0.8
+
+  io_read_mode: "auto"
   max_age_s: 0.5
+
   recovery_speed_m_s: 0.08
-  recovery_max_m: 0.08 # ขยับหลบทีละไม่เกิน 8 cm ต่อ attempt (ให้พ้นกรวย IR ในครั้งเดียว)
-  recovery_max_attempts: 8 # สลับสองทิศทางสูงสุดทิศละ 4 ครั้ง
-  recovery_total_max_m: 0.24
+  recovery_max_m: 0.08
+  recovery_max_attempts: 8
+  recovery_total_max_m: 0.45
   recovery_clear_samples: 3
-  recovery_mode: "cardinal" # เดินหน้า/ถอยหลังหลบ IR ซ้าย/ขวาด้วยการสไลด์; ตอนสไลด์เจอ IR หน้าให้ถอยหลัง
+  recovery_mode: "adaptive"
+
   direct_io_fallback: true  # Confirm suspected DDS contacts with get_io before recovery.
   direct_fallback_cache_s: 0.2
 
@@ -139,6 +148,10 @@ mission:
 
 
 exploration:
+  ir_lane:
+    enabled: true
+    min_shift_m: 0.005 # Ignore lateral recovery smaller than 5 mm.
+    max_offset_m: 0.10 # Total offset per edge, not an allowance per recovery.
   enabled: true       # เปิดหลังสอบเทียบตำแหน่งแกน yaw/pivot และระยะหัว ToF; true = เริ่ม SLAM + DFS และสั่งรถเดิน
   position_coordinate_system: 1 # ผูกแผนที่กับพิกัดตั้งแต่เปิดหุ่นยนต์ เพื่อให้โหลดแผนที่เดิมได้ในรอบเปิดเครื่องเดียวกัน
   step_m: 0.60            # ขนาดช่องกริดกำแพง และระยะเดินระหว่างศูนย์กลางช่อง

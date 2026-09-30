@@ -157,99 +157,378 @@ class ChassisController:
             return True, getattr(opposite, "last_block", "detected")
         return False, None
 
-    def _recover_from_ir(self, bumper, side, attempt, period, deadline, abort_event,
-                         pause_if, movement_axis="longitudinal", recovery_budget=None):
-        """Move away from active IRs for one bounded recovery attempt."""
+    def _adaptive_ir_escape(
+        self,
+        bumper,
+        sensors,
+        speed,
+        attempt,
+        movement_axis,
+        longitudinal_clear,
+        clearance_reason,
+    ):
+        """Try alternate translations using current IR/ToF checks."""
+        preferred = recovery_vector(
+            sensors,
+            speed,
+            attempt=attempt,
+            end=bumper.end,
+            mode="adaptive",
+            forward_clear=longitudinal_clear is True,
+            movement_axis=movement_axis,
+        )
+
+        if preferred[0] == "clear":
+            return preferred, None
+
+        candidates = [preferred]
+
+        # Try both cardinal priorities before giving up.
+        for candidate_attempt in (1, 2):
+            candidates.append(
+                recovery_vector(
+                    sensors,
+                    speed,
+                    attempt=candidate_attempt,
+                    end=bumper.end,
+                    mode="cardinal",
+                    forward_clear=longitudinal_clear is True,
+                    movement_axis=movement_axis,
+                )
+            )
+
+        # Diagonal escape requires longitudinal clearance.
+        if longitudinal_clear is True:
+            candidates.append(
+                recovery_vector(
+                    sensors,
+                    speed,
+                    attempt=1,
+                    end=bumper.end,
+                    mode="diagonal",
+                    forward_clear=True,
+                    movement_axis=movement_axis,
+                )
+            )
+
+        opposite = (
+            self.front_ir
+            if bumper.end == "rear"
+            else self.rear_ir
+        )
+
+        waiting = False
+        rejected = []
+        seen = set()
+
+        for direction, vx, vy in candidates:
+            candidate = (direction, vx, vy)
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+
+            if direction == "blocked":
+                waiting = (
+                    waiting or longitudinal_clear is None
+                )
+                rejected.append(
+                    clearance_reason
+                    or "longitudinal path blocked"
+                )
+                continue
+
+            if vx != 0 and longitudinal_clear is not True:
+                waiting = (
+                    waiting or longitudinal_clear is None
+                )
+                rejected.append(
+                    clearance_reason
+                    or "longitudinal path blocked"
+                )
+                continue
+
+            destination_side = (
+                "right"
+                if vy > 0
+                else "left"
+                if vy < 0
+                else None
+            )
+
+            if (
+                destination_side
+                and (
+                    sensors[destination_side]["detected"]
+                    is not False
+                )
+            ):
+                rejected.append(
+                    "{} IR {} blocks lateral escape".format(
+                        bumper.end,
+                        destination_side,
+                    )
+                )
+                continue
+
+            if opposite is not None:
+                blocked, side = (
+                    self._opposite_blocks_recovery_path(
+                        opposite,
+                        vx,
+                        vy,
+                        bumper.end,
+                    )
+                )
+
+                if blocked:
+                    waiting = (
+                        waiting or side == "waiting_data"
+                    )
+                    rejected.append(
+                        "{} IR {} blocks {}".format(
+                            opposite.end,
+                            side,
+                            direction,
+                        )
+                    )
+                    continue
+
+            return (direction, vx, vy), None
+
+        return (
+            (
+                "waiting_clearance" if waiting else "blocked",
+                0.0,
+                0.0,
+            ),
+            "; ".join(rejected)
+            or "no clear escape direction",
+        )
+
+    def _recover_from_ir(
+        self,
+        bumper,
+        side,
+        attempt,
+        period,
+        deadline,
+        abort_event,
+        pause_if,
+        movement_axis="longitudinal",
+        recovery_budget=None,
+    ):
+        """Recover using distance measured from position telemetry."""
         settings = bumper.settings
         forward = settings["recovery_speed_m_s"]
+
         if recovery_budget is None:
-            recovery_budget = {"commanded_m": 0.0}
+            recovery_budget = {"traveled_m": 0.0}
+
         total_max_m = settings.get(
-            "recovery_total_max_m", settings["recovery_max_m"])
-        origin = None
-        last_pose = None
+            "recovery_total_max_m",
+            settings["recovery_max_m"],
+        )
+
         last_sample_time = None
         clear_count = 0
-        commanded_m = 0.0
+        traveled_m = 0.0
         status = "stopped"
         reason = None
+
         bumper.recovering = side
+
         try:
             while True:
-                if abort_event is not None and abort_event.is_set():
-                    raise MissionStop("IR recovery aborted because exploration telemetry failed")
-                if deadline is not None and time.monotonic() >= deadline:
-                    raise MissionStop("IR recovery exceeded waypoint time")
+                if (
+                    abort_event is not None
+                    and abort_event.is_set()
+                ):
+                    raise MissionStop(
+                        "IR recovery aborted because "
+                        "exploration telemetry failed"
+                    )
+
+                if (
+                    deadline is not None
+                    and time.monotonic() >= deadline
+                ):
+                    raise MissionStop(
+                        "IR recovery exceeded waypoint time"
+                    )
+
                 if pause_if is not None and pause_if():
                     self.stop()
                     clear_count = 0
                     time.sleep(period)
                     continue
+
                 state = bumper.snapshot()
                 sensors = state["sides"]
                 pose = self.get_pose()
-                if (any(sensor["detected"] is None for sensor in sensors.values()) or
-                        pose is None):
+
+                # Accumulate measured travel between position samples.
+                # The budget retains the last position across attempts.
+                if pose is not None:
+                    position_time = self.position_sample_time
+
+                    previous_pose = recovery_budget.get(
+                        "last_pose"
+                    )
+                    previous_time = recovery_budget.get(
+                        "last_position_time"
+                    )
+
+                    new_position = (
+                        position_time is None
+                        or previous_time is None
+                        or position_time > previous_time
+                    )
+
+                    if new_position:
+                        if previous_pose is not None:
+                            distance_delta = math.hypot(
+                                pose[0] - previous_pose[0],
+                                pose[1] - previous_pose[1],
+                            )
+
+                            traveled_m += distance_delta
+                            recovery_budget["traveled_m"] += (
+                                distance_delta
+                            )
+
+                        recovery_budget["last_pose"] = tuple(
+                            pose
+                        )
+                        recovery_budget["last_position_time"] = (
+                            position_time
+                        )
+
+                if (
+                    any(
+                        sensor["detected"] is None
+                        for sensor in sensors.values()
+                    )
+                    or pose is None
+                ):
                     self.stop()
                     clear_count = 0
                     time.sleep(period)
                     continue
-                if origin is None:
-                    origin = pose
-                last_pose = pose
-                traveled_m = math.hypot(pose[0] - origin[0], pose[1] - origin[1])
-                reached_limit = (traveled_m >= settings["recovery_max_m"] or
-                                 commanded_m >= settings["recovery_max_m"])
-                reached_total_limit = recovery_budget["commanded_m"] >= total_max_m
+
+                reached_limit = (
+                    traveled_m >= settings["recovery_max_m"]
+                )
+
+                reached_total_limit = (
+                    recovery_budget["traveled_m"] >= total_max_m
+                )
+
                 sample_time = state["sample_time"]
-                new_sample = sample_time != last_sample_time
+                new_sample = (
+                    sample_time != last_sample_time
+                )
+
                 both_clear = all(
-                    sensor["detected"] is False for sensor in sensors.values())
-                opposite = self.front_ir if bumper.end == "rear" else self.rear_ir
-                if both_clear and opposite is not None and hasattr(opposite, "snapshot"):
-                    opp_state = opposite.snapshot()
-                    if opp_state.get("state") == "ready":
-                        opp_sides = opp_state.get("sides", {})
-                        if side in ("left", "right") and opp_sides.get(side, {}).get("detected") is True:
-                            both_clear = False
+                    sensor["detected"] is False
+                    for sensor in sensors.values()
+                )
+
                 if new_sample:
-                    clear_count = clear_count + 1 if both_clear else 0
+                    clear_count = (
+                        clear_count + 1 if both_clear else 0
+                    )
                     last_sample_time = sample_time
-                if clear_count >= settings["recovery_clear_samples"]:
+
+                if (
+                    clear_count
+                    >= settings["recovery_clear_samples"]
+                ):
                     status = "cleared"
                     bumper.last_block = None
-                    if opposite is not None and hasattr(opposite, "last_block"):
-                        opposite.last_block = None
+                    recovery_budget["cleared_pose"] = tuple(pose)
                     return True
+
+                if both_clear:
+                    # Stay still while confirming fresh clear samples.
+                    self.stop()
+                    time.sleep(period)
+                    continue
+
                 if not new_sample:
                     self.stop()
                     time.sleep(period)
                     continue
-                if reached_limit or reached_total_limit:
-                    if both_clear:
-                        # Do not move farther while confirming the remaining
-                        # clear samples at the recovery distance boundary.
-                        self.stop()
-                        time.sleep(period)
-                        continue
-                    if reached_total_limit:
-                        status = "total_limit"
-                        reason = ("{} IR {} still blocked after {:.3f} m total recovery"
-                                  .format(bumper.end, side,
-                                          recovery_budget["commanded_m"]))
-                        raise MissionStop(reason)
-                    status = "limit"
-                    reason = "{} IR {} still blocked after one recovery attempt".format(
-                        bumper.end, side)
-                    return False
-                longitudinal_clear, clearance_reason = (
-                    self._longitudinal_ir_escape_clearance(bumper, forward))
 
-                mode = settings.get("recovery_mode", "diagonal")
-                direction, escape_x, escape_y = recovery_vector(
-                    sensors, forward, attempt=attempt, end=bumper.end,
-                    mode=mode, forward_clear=longitudinal_clear is True,
-                    movement_axis=movement_axis)
+                if reached_total_limit:
+                    status = "total_limit"
+                    reason = (
+                        "{} IR {} still blocked after "
+                        "{:.3f} m total recovery"
+                    ).format(
+                        bumper.end,
+                        side,
+                        recovery_budget["traveled_m"],
+                    )
+                    raise MissionStop(reason)
+
+                if reached_limit:
+                    status = "limit"
+                    reason = (
+                        "{} IR {} still blocked "
+                        "after one recovery attempt"
+                    ).format(
+                        bumper.end,
+                        side,
+                    )
+                    return False
+
+                longitudinal_clear, clearance_reason = (
+                    self._longitudinal_ir_escape_clearance(
+                        bumper,
+                        forward,
+                    )
+                )
+
+                mode = settings.get(
+                    "recovery_mode",
+                    "diagonal",
+                )
+
+                direction, escape_x, escape_y = (
+                    recovery_vector(
+                        sensors,
+                        forward,
+                        attempt=attempt,
+                        end=bumper.end,
+                        mode=mode,
+                        forward_clear=(
+                            longitudinal_clear is True
+                        ),
+                        movement_axis=movement_axis,
+                    )
+                )
+
+                if mode == "adaptive":
+                    vector, clearance_reason = (
+                        self._adaptive_ir_escape(
+                            bumper,
+                            sensors,
+                            forward,
+                            attempt,
+                            movement_axis,
+                            longitudinal_clear,
+                            clearance_reason,
+                        )
+                    )
+                    direction, escape_x, escape_y = vector
+
+                if direction == "waiting_clearance":
+                    self.stop()
+                    bumper.recovering = "waiting_clearance"
+                    clear_count = 0
+                    time.sleep(period)
+                    continue
+
                 if direction == "blocked":
                     if longitudinal_clear is None:
                         self.stop()
@@ -257,57 +536,110 @@ class ChassisController:
                         clear_count = 0
                         time.sleep(period)
                         continue
+
                     status = "blocked"
-                    reason = "{} IR {} has no clear longitudinal escape: {}".format(
-                        bumper.end, side, clearance_reason)
+                    reason = (
+                        "{} IR {} has no clear escape: {}"
+                    ).format(
+                        bumper.end,
+                        side,
+                        clearance_reason,
+                    )
                     return False
+
                 if direction == "clear":
-                    # Hold still while confirming consecutive clear samples.
                     self.stop()
                     time.sleep(period)
                     continue
-                if escape_x != 0 and longitudinal_clear is not True:
+
+                if (
+                    escape_x != 0
+                    and longitudinal_clear is not True
+                ):
                     if longitudinal_clear is None:
                         self.stop()
                         bumper.recovering = "waiting_clearance"
                         clear_count = 0
                         time.sleep(period)
                         continue
+
                     status = "blocked"
-                    reason = "{} IR {} longitudinal recovery blocked: {}".format(
-                        bumper.end, side, clearance_reason)
+                    reason = (
+                        "{} IR {} longitudinal recovery "
+                        "blocked: {}"
+                    ).format(
+                        bumper.end,
+                        side,
+                        clearance_reason,
+                    )
                     return False
-                opposite = self.front_ir if bumper.end == "rear" else self.rear_ir
+
+                opposite = (
+                    self.front_ir
+                    if bumper.end == "rear"
+                    else self.rear_ir
+                )
+
                 if opposite is not None:
-                    opp_blocked, opp_block_side = self._opposite_blocks_recovery_path(
-                        opposite, escape_x, escape_y, bumper.end)
+                    opp_blocked, opp_block_side = (
+                        self._opposite_blocks_recovery_path(
+                            opposite,
+                            escape_x,
+                            escape_y,
+                            bumper.end,
+                        )
+                    )
+
                     if opp_blocked:
                         self.stop()
+
                         if opp_block_side == "waiting_data":
                             clear_count = 0
                             time.sleep(period)
                             continue
+
                         status = "blocked"
-                        reason = "{} IR {} blocks {} recovery".format(
-                            opposite.end, opp_block_side, bumper.end)
+                        reason = (
+                            "{} IR {} blocks {} recovery"
+                        ).format(
+                            opposite.end,
+                            opp_block_side,
+                            bumper.end,
+                        )
                         return False
+
                 bumper.recovering = direction
-                self.chassis.drive_speed(x=escape_x, y=escape_y, z=0)
+
+                self.chassis.drive_speed(
+                    x=escape_x,
+                    y=escape_y,
+                    z=0,
+                )
+
                 self.commanded_lateral_m_s = escape_y
-                commanded_m += forward * period
-                recovery_budget["commanded_m"] += forward * period
+
+                # No speed * time accounting here.
+                # Only changes in position consume the budget.
+
                 time.sleep(period)
+
         except MissionStop as error:
             reason = str(error)
             raise
+
         finally:
             self.stop()
-            distance_m = (math.hypot(last_pose[0] - origin[0], last_pose[1] - origin[1])
-                          if origin is not None and last_pose is not None else 0.0)
-            bumper.finish_recovery(side, status, distance_m, reason)
+
+            bumper.finish_recovery(
+                side,
+                status,
+                traveled_m,
+                reason,
+            )
 
     def move_to(self, x, y, yaw=None, timeout_s=None, abort_event=None,
-                disable_timeout=False, stop_if=None, pause_if=None):
+                disable_timeout=False, stop_if=None, pause_if=None,
+                on_ir_recovered=None):
         """Drive toward an absolute (x, y) waypoint; optionally face yaw.
 
         x/y use the chassis position frame established at subscription.
@@ -316,6 +648,8 @@ class ChassisController:
         ends the move at that pose and the finally block stops the wheels.
         Missing telemetry pauses the wheels until fresh data returns. A caller
         supplied deadline still raises TimeoutError when progress never finishes.
+        on_ir_recovered receives the episode's start pose, fresh cleared pose,
+        and current target. It may return a replacement (x, y) target.
         """
         timeout = None if disable_timeout else (
             timeout_s if timeout_s is not None else self.settings["timeout_s"]
@@ -334,8 +668,14 @@ class ChassisController:
         measured_speed = 0.0
         target_yaw = yaw
         recovery_state = {
-            "front": {"attempts": 0, "commanded_m": 0.0},
-            "rear": {"attempts": 0, "commanded_m": 0.0},
+            "front": {
+                "attempts": 0,
+                "traveled_m": 0.0,
+            },
+            "rear": {
+                "attempts": 0,
+                "traveled_m": 0.0,
+            },
         }
         if yaw is not None:
             self.heading_reference = yaw
@@ -457,6 +797,7 @@ class ChassisController:
                     if bumper is not None:
                         side = bumper.last_block
                         state = recovery_state[bumper.end]
+                        state.setdefault("start_pose", tuple(pose))
                         state["attempts"] += 1
                         max_attempts = bumper.settings.get("recovery_max_attempts", 1)
                         if state["attempts"] > max_attempts:
@@ -470,13 +811,34 @@ class ChassisController:
                                            else "longitudinal"),
                             recovery_budget=state)
                         if recovered:
+                            if on_ir_recovered is not None:
+                                replacement = on_ir_recovered(
+                                    state["start_pose"], state["cleared_pose"], (x, y))
+                                if replacement is not None:
+                                    x, y = replacement
                             state["attempts"] = 0
-                            state["commanded_m"] = 0.0
+                            state["traveled_m"] = 0.0
+                            state.pop("start_pose", None)
+                            state.pop("cleared_pose", None)
+
+                            # Start the next recovery episode
+                            # with a new position baseline.
+                            state.pop("last_pose", None)
+                            state.pop(
+                                "last_position_time", None
+                            )
+
                         elif state["attempts"] >= max_attempts:
                             raise MissionStop(
-                                "{} IR {} recovery exhausted after {} attempts and {:.3f} m"
-                                .format(bumper.end, side, state["attempts"],
-                                        state["commanded_m"]))
+                                "{} IR {} recovery exhausted "
+                                "after {} attempts and {:.3f} m"
+                                .format(
+                                    bumper.end,
+                                    side,
+                                    state["attempts"],
+                                    state["traveled_m"],
+                                )
+                            )
                     for pid in (self.pid_x, self.pid_y, self.pid_yaw):
                         pid.reset()
                     previous_position = None

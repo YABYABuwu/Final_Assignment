@@ -53,6 +53,7 @@ class SensorLogger:
         self.run_status = "running"
         self.run_error = None
         self.exploration_state = None
+        self.round2_navigation = None
         self.received_rows = {name: 0 for name in self.stream_settings}
 
     def _callback(self, name, data):
@@ -134,6 +135,7 @@ class SensorLogger:
         self.run_status = "running"
         self.run_error = None
         self.exploration_state = None
+        self.round2_navigation = None
         self.received_rows = {name: 0 for name in self.stream_settings}
         self.stop_writer.clear()
         self.accepting = True
@@ -242,6 +244,7 @@ class SensorLogger:
                 "front_ir_recoveries": getattr(self, "front_ir_recoveries", []),
                 "logger_errors": errors,
                 "exploration": self.exploration_state,
+                "round2_navigation": getattr(self, "round2_navigation", None),
             }
             temporary_path = self.run_dir / "run_summary.tmp"
             with temporary_path.open("w", encoding="utf-8") as file:
