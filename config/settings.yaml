@@ -5,7 +5,7 @@ connection:
 motion:
   position_tolerance_m: 0.015  # ถือว่าถึงจุดเมื่อห่างไม่เกิน 5 ซม.
   angle_tolerance_deg: 0.5      # ยอมให้มุมคลาดเคลื่อนได้ 3 องศา
-  timeout_s: 15               # เวลาสูงสุดต่อ waypoint
+  timeout_s: 25               # เวลาสูงสุดต่อ waypoint
   sample_timeout_s: 1.0       # หาก position/attitude เก่ากว่านี้ ให้หยุด
   control_period_s: 0.1       # ระยะเวลาระหว่างคำสั่งความเร็ว
   max_speed_m_s: 0.3         # เพดานความเร็วรวมของแกน x/y
@@ -90,16 +90,16 @@ rear_ir:
   max_age_s: 0.5
 
   recovery_speed_m_s: 0.08
-  recovery_max_m: 0.08
+  recovery_max_m: 0.03
   recovery_max_attempts: 8
-  recovery_total_max_m: 0.45
+  recovery_total_max_m: 0.24
   recovery_clear_samples: 3
   recovery_mode: "adaptive"
 
   forward_tof_clear_mm: 250
   forward_tof_max_age_s: 0.5
 
-  direct_io_fallback: true  # Confirm suspected DDS contacts with get_io before recovery.
+  direct_io_fallback: true  # Confirm corrupted DDS streams with get_io fallback.
   direct_fallback_cache_s: 0.2
 
 # Front/Rear ใช้ polarity ที่กำหนดคงที่ เพราะปิด auto calibration
@@ -116,9 +116,9 @@ front_ir:
   max_age_s: 0.5
 
   recovery_speed_m_s: 0.08
-  recovery_max_m: 0.08
+  recovery_max_m: 0.03
   recovery_max_attempts: 8
-  recovery_total_max_m: 0.45
+  recovery_total_max_m: 0.24
   recovery_clear_samples: 3
   recovery_mode: "adaptive"
 

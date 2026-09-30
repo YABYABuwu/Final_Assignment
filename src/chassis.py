@@ -827,6 +827,8 @@ class ChassisController:
                             state.pop(
                                 "last_position_time", None
                             )
+                            if timeout is not None:
+                                deadline = time.monotonic() + timeout
 
                         elif state["attempts"] >= max_attempts:
                             raise MissionStop(

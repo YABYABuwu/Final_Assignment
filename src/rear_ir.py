@@ -140,13 +140,16 @@ class IRBumper:
 
     @staticmethod
     def _stream_io_is_invalid(values):
-        """Detect the post-power-cycle DDS failure: all IO=0 while ADC is alive."""
+        """Detect the post-power-cycle DDS failure: all or almost all IO=0 while ADC is alive."""
         if len(values) < 24:
             return False
         io_values = values[:12]
         adc_values = values[12:24]
-        return (all(type(value) is int and value == 0 for value in io_values) and
-                any(isinstance(value, (int, float)) and value > 0 for value in adc_values))
+        live_adcs = sum(1 for value in adc_values if isinstance(value, (int, float)) and value > 0)
+        if live_adcs == 0:
+            return False
+        zero_ios = sum(1 for value in io_values if type(value) is int and value == 0)
+        return zero_ios == 12 or (zero_ios >= 11 and live_adcs >= 12)
 
     def _stream_reports_detection(self, values):
         """Return True when DDS claims any configured bumper is active.
@@ -204,8 +207,7 @@ class IRBumper:
         use_direct = (read_mode == "direct" or
                       (read_mode == "auto" and
                        self.settings.get("direct_io_fallback", True) and
-                       (self._stream_io_is_invalid(values) or
-                        self._stream_reports_detection(values))))
+                       self._stream_io_is_invalid(values)))
         if use_direct:
             direct_values, timestamp = self._read_direct_io()
             io_source = "direct" if read_mode == "direct" else "direct_fallback"
