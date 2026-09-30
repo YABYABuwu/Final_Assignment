@@ -89,6 +89,7 @@
         <div class="map-wrap">
           <label class="muted"><input id="fine-map" type="checkbox"> แสดง occupancy ละเอียด</label>
           <canvas id="map" aria-label="เส้นทาง ตำแหน่ง และทิศหุ่นยนต์"></canvas>
+          <div class="muted" id="map-field">สนาม: รอข้อมูล</div>
           <div class="map-legend"><span class="key" style="--key:#8cf1d2">ขอบทางเปิด</span><span class="key" style="--key:#ffb868">กำแพง</span><span class="key" style="--key:#718594">เส้นประ: ยังไม่รู้/อนุมาน</span><span class="key" style="--key:#69d9ff">เส้นทาง</span></div>
           <div class="map-info"><div>DFS&nbsp; <strong id="dfs-status">ปิด</strong></div><div id="map-counts">รอข้อมูลแผนที่</div><div id="pose">X — · Y — · Yaw —</div><div>ความเร็ว&nbsp; <strong id="speed">— m/s</strong></div><div>อัตราเร่งสไลด์ซ้าย/ขวาสูงสุด&nbsp; <strong id="acceleration">— m/s²</strong></div><div>ค่าชะลอเข้า waypoint&nbsp; <strong id="braking">— m/s²</strong></div><div>Gimbal&nbsp; <span id="gimbal-map">—</span></div><div id="heading-alignment">จัดมุมจากกำแพง: รอข้อมูล</div><div>DFS เลือกขอบทางเปิดจาก ToF ที่สแกนใหม่</div><div>ทิศแผนที่: ↑ +X เหนือ · ↓ −X ใต้ · → +Y ตะวันออก</div><div id="tof-model">ToF: —</div><div id="cell-sides"></div><div id="target-inspections">ตรวจเป้าที่กำแพง: รอข้อมูล</div><div id="map-message"></div></div>
         </div>
@@ -145,6 +146,9 @@
       const canvas = document.getElementById("map");
       const {context: ctx, width: w, height: h} = canvasContext(canvas);
       ctx.clearRect(0, 0, w, h);
+      document.getElementById("map-field").textContent = slamMap?.width > 0 && slamMap?.height > 0 && slamMap?.origin
+        ? `สนาม ${number(slamMap.width*slamMap.resolution_m, 2)} × ${number(slamMap.height*slamMap.resolution_m, 2)} ม. · จุด SDK (0,0) ห่างขอบ −X ${number(-slamMap.origin[0], 2)} ม. / −Y ${number(-slamMap.origin[1], 2)} ม.`
+        : "สนาม: รอข้อมูล";
       const wallHeading=slamMap?.exploration?.last_heading_alignment;
       const headingProgress=slamMap?.exploration?.heading_measurement;
       document.getElementById("heading-alignment").textContent = slamMap?.exploration?.heading_alignment_enabled === false

@@ -68,6 +68,12 @@ class DFSExplorer:
                 "moves": self.moves,
                 "ir_lanes": [dict(value) for _, value in sorted(self.ir_lanes.items())],
                 "last_ir_lane": dict(self.last_ir_lane) if self.last_ir_lane else None,
+                "map_bounds": {
+                    "width_m": self.map.width * self.map.resolution,
+                    "height_m": self.map.height * self.map.resolution,
+                    "start_x_m": -self.map.origin_x,
+                    "start_y_m": -self.map.origin_y,
+                },
                 "heading_source": self.settings["heading_source"],
                 "travel_heading_deg": self.travel_heading_deg,
                 "gimbal_pitch_frame": "chassis",

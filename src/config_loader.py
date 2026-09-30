@@ -343,6 +343,13 @@ def load_config(path=DEFAULT_CONFIG):
     cells_y = round(map_settings["height_m"] / map_settings["resolution_m"])
     if cells_x < 2 or cells_y < 2 or cells_x * cells_y > 500000:
         raise ValueError("exploration map must contain between 4 and 500000 cells")
+    for name, cells in (("start_x_m", cells_x), ("start_y_m", cells_y)):
+        start = map_settings.get(name)
+        if start is not None and (type(start) not in (int, float) or
+                                  not math.isfinite(start) or
+                                  not 0 <= start < cells * map_settings["resolution_m"]):
+            raise ValueError(
+                f"exploration.map.{name} must be null or within the map extent")
     for name in ("free_update", "occupied_update"):
         value = map_settings.get(name)
         if not isinstance(value, (int, float)) or not math.isfinite(value) or value == 0:

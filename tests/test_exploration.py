@@ -282,6 +282,8 @@ class ExplorationTests(unittest.TestCase):
         # Keep the simulated geometry stable when the hardware settings change.
         self.settings["wall_threshold_mm"] = 300
         self.settings["tof_median_window"] = 1
+        self.settings["map"].update({"width_m": 12.0, "height_m": 12.0,
+                                     "start_x_m": None, "start_y_m": None})
         self.settings["alignment"].update({"enabled": True, "wall_distance_m": .25,
                                            "tolerance_m": .03, "max_shift_m": .20})
         self.settings["target_inspection"]["enabled"] = False
@@ -525,6 +527,27 @@ class ExplorationTests(unittest.TestCase):
             self.assertEqual(rows[1:9], bytes([255] * 4 + [205] * 4))
             self.assertEqual(rows[-8:], bytes([0] * 4 + [205] * 4))
             self.assertFalse(path.with_name("latest-grid.png").exists())
+
+    def test_field_size_and_sdk_start_position_control_map_extent(self):
+        settings = copy.deepcopy(self.settings)
+        settings["map"].update({"width_m": 4.0, "height_m": 3.0,
+                                "start_x_m": 0.6, "start_y_m": 0.4})
+        slam_map = OccupancyGridSLAM(settings)
+        self.assertEqual((slam_map.width, slam_map.height), (80, 60))
+        self.assertEqual(slam_map.to_dict()["origin"], [-0.6, -0.4, 0.0])
+        self.assertEqual(slam_map.world_to_cell(0, 0), (12, 8))
+        self.assertFalse(slam_map.contains_world(-0.7, 0))
+        self.assertTrue(slam_map.contains_world(3.3, 2.5))
+        restored = OccupancyGridSLAM(self.settings)
+        restored.load_dict(slam_map.to_dict())
+        self.assertEqual(restored.to_dict()["origin"], [-0.6, -0.4, 0.0])
+        self.assertEqual((restored.width, restored.height), (80, 60))
+
+        centered = copy.deepcopy(settings)
+        centered["map"]["start_x_m"] = None
+        centered["map"]["start_y_m"] = None
+        self.assertEqual(OccupancyGridSLAM(centered).to_dict()["origin"],
+                         [-2.0, -1.5, 0.0])
 
     def test_grid_png_marks_wall_open_unknown_and_current_cell(self):
         slam_map = self.make_map()

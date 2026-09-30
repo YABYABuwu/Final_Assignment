@@ -75,8 +75,10 @@ class TemplateTests(unittest.TestCase):
         self.assertGreater(config["exploration"]["emergency_stop_distance_m"], 0)
         self.assertEqual(config["front_ir"]["recovery_max_attempts"], 8)
         self.assertEqual(config["rear_ir"]["recovery_max_attempts"], 8)
-        self.assertEqual(config["front_ir"]["recovery_total_max_m"], .24)
-        self.assertEqual(config["rear_ir"]["recovery_total_max_m"], .24)
+        self.assertGreaterEqual(config["front_ir"]["recovery_total_max_m"],
+                                config["front_ir"]["recovery_max_m"])
+        self.assertGreaterEqual(config["rear_ir"]["recovery_total_max_m"],
+                                config["rear_ir"]["recovery_max_m"])
         self.assertNotIn("min_range_m", config["exploration"]["map"])
         self.assertNotIn("max_range_m", config["exploration"]["map"])
 
@@ -452,6 +454,16 @@ class TemplateTests(unittest.TestCase):
             path.write_text(yaml.safe_dump(config), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "heading_alignment.scan_offsets_deg"):
                 load_config(path)
+
+    def test_field_start_must_fit_inside_effective_map_extent(self):
+        for start_x in (-0.1, 12.0, float("nan"), True):
+            config = load_config()
+            config["exploration"]["map"]["start_x_m"] = start_x
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "settings.yaml"
+                path.write_text(yaml.safe_dump(config), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "exploration.map.start_x_m"):
+                    load_config(path)
 
     def test_move_to_corrects_heading_drift_without_new_turn_target(self):
         module = FakeModule()

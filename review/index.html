@@ -375,6 +375,12 @@
           wallPanel.append(note);
         }
         const scanned=run.summary.exploration?.scanned_cells;
+        const bounds=run.summary.exploration?.map_bounds;
+        if (bounds) {
+          const note=document.createElement("p");
+          note.textContent=`สนาม ${bounds.width_m.toFixed(2)} × ${bounds.height_m.toFixed(2)} ม. · จุด SDK (0,0) ห่างขอบ −X ${bounds.start_x_m.toFixed(2)} ม. / −Y ${bounds.start_y_m.toFixed(2)} ม.`;
+          wallPanel.append(note);
+        }
         if (run.summary.motion_settings?.max_lateral_accel_m_s2 != null) {
           const note=document.createElement("p");
           note.textContent=`ความเร็วเลื่อนสูงสุด ${run.summary.motion_settings.max_speed_m_s.toFixed(2)} m/s · อัตราเร่งสไลด์ซ้าย/ขวาสูงสุด ${run.summary.motion_settings.max_lateral_accel_m_s2.toFixed(2)} m/s²`;

@@ -189,8 +189,12 @@ class OccupancyGridSLAM:
         if self.width < 2 or self.height < 2 or self.width * self.height > 500_000:
             raise ValueError("SLAM grid must contain between 4 and 500000 cells")
         self.log_odds = [0.0] * (self.width * self.height)
-        self.origin_x = -self.width * self.resolution / 2.0
-        self.origin_y = -self.height * self.resolution / 2.0
+        start_x = map_settings.get("start_x_m")
+        start_y = map_settings.get("start_y_m")
+        self.origin_x = -(self.width * self.resolution / 2.0 if start_x is None
+                          else float(start_x))
+        self.origin_y = -(self.height * self.resolution / 2.0 if start_y is None
+                          else float(start_y))
         self.anchor_pose = None
         self.pose = None
         self.trajectory = []
@@ -211,8 +215,10 @@ class OccupancyGridSLAM:
     def world_to_cell(self, x, y):
         if self.origin_x is None:
             return None
-        return (math.floor((x - self.origin_x) / self.resolution),
-                math.floor((y - self.origin_y) / self.resolution))
+        # Keep exact cell boundaries stable despite binary rounding (for
+        # example 0.6 / 0.05 evaluates just below 12 on Python 3.8).
+        return (math.floor((x - self.origin_x) / self.resolution + 1e-9),
+                math.floor((y - self.origin_y) / self.resolution + 1e-9))
 
     def contains_world(self, x, y):
         cell = self.world_to_cell(x, y)

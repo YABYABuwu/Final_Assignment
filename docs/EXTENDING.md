@@ -54,6 +54,8 @@ ToF ไม่มีเกณฑ์ระยะสั้นสุด/ไกลส
 
 หน้า dashboard และ `/api/map` ใช้ `sensor_model` metadata ชุดเดียวกันเพื่อแสดง channel, offset และทิศหัว ToF; หากเปลี่ยนช่อง, offset, pivot หรือ yaw alignment ให้ตรวจทั้ง overlay กับ JSON export/import. ค่าเริ่มต้นสมมติว่า offset 7.5 ซม. อยู่แนวเลนส์ (`offset_yaw_deg: 0`). ค่า `pivot_x_m/pivot_y_m` ต้องวัดจากหุ่นจริง เพราะระยะ 7.5 ซม. ที่ทราบอยู่แล้วเริ่มจากแกน gimbal ไม่ได้ระบุตำแหน่งแกนเทียบจุดกลาง chassis.
 
+ขอบแผนที่ใช้ `width_m`/`height_m` และ `start_x_m`/`start_y_m` ใน `exploration.map`; จุดเริ่มหมายถึงพิกัด SDK `(0,0)` วัดจากขอบ −X/−Y ไม่ใช่พิกัดกริด DFS. ค่า `null` คำนวณครึ่งความกว้าง/สูงตามเดิม เมื่อแก้ตำแหน่งเริ่มให้ตรวจว่า `origin`, PNG, dashboard canvas และแผนที่ที่ import ยังแสดงแกนเดียวกัน รวมถึงบันทึก `map_bounds` ใน run summary สำหรับหน้า review.
+
 การหยุด `SlamWorker` บันทึก PNG คู่กับ JSON จาก `exploration.map.save_path` และ `map.png` ในโฟลเดอร์ log ของรัน; PNG เป็นภาพ occupancy ที่ +X อยู่ด้านบนและ +Y อยู่ด้านขวาเหมือน dashboard ใช้สีขาวแทนว่าง เทาแทนยังไม่รู้ และดำแทนกำแพง ต้องตรวจ PNG ที่บันทึกและ `/api/map/export?format=png` เมื่อต้องเปลี่ยนการวางแกนหรือสี
 
 PNG ของกริด DFS แยกเป็น `latest-grid.png` และ `map-grid.png` ในโฟลเดอร์รัน พร้อม endpoint `format=grid-png`; แสดง +X ขึ้น/+Y ขวาในแกนกริด สีส้มคือกำแพง เขียวคือขอบเปิด และเทาคือขอบยังไม่รู้ เส้นทาง stack สีฟ้า ไม่มีไฟล์กริดเมื่อยังไม่มี `cell_grid` ที่สแกนแล้ว
