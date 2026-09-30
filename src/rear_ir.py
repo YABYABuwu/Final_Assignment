@@ -151,7 +151,7 @@ class IRBumper:
         if live_adcs == 0:
             return False
         zero_ios = sum(1 for value in io_values if type(value) is int and value == 0)
-        return zero_ios == 12 or (zero_ios >= 11 and live_adcs >= 12)
+        return zero_ios == 12 or (zero_ios >= 10 and live_adcs >= 4)
 
     def _stream_reports_detection(self, values):
         """Return True when DDS claims any configured bumper is active.
@@ -209,7 +209,8 @@ class IRBumper:
         use_direct = (read_mode == "direct" or
                       (read_mode == "auto" and
                        self.settings.get("direct_io_fallback", True) and
-                       self._stream_io_is_invalid(values)))
+                       (self._stream_io_is_invalid(values) or
+                        self._stream_reports_detection(values))))
         if use_direct:
             direct_values, timestamp = self._read_direct_io()
             io_source = "direct" if read_mode == "direct" else "direct_fallback"

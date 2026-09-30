@@ -9,6 +9,7 @@ import time
 from src.slam import CellWallGrid, _wrap_degrees
 from src.mission_stop import MissionStop
 from src.ir_lane import prepare_lane, retarget_lane
+from src.gimbal_control import wait_for_gimbal_idle
 
 
 class DFSExplorer:
@@ -246,7 +247,25 @@ class DFSExplorer:
         reachable = [angle for angle in candidates if -250.0 <= angle <= 250.0]
         if not reachable:
             raise MissionStop("gimbal cannot reach the requested direction within its yaw limits")
+        # When facing the rear (~180 deg) from near-center, prefer negative yaw (-180 deg)
+        # because the RoboMaster EP cable harness has ample clockwise slack without binding.
+        if abs(abs(_wrap_degrees(target_relative_yaw)) - 180.0) <= 30.0 and abs(current_relative_yaw) < 80.0:
+            neg_candidates = [a for a in reachable if a < 0]
+            if neg_candidates:
+                return max(neg_candidates)
         return min(reachable, key=lambda angle: abs(angle - current_relative_yaw))
+
+    def _wait_for_gimbal_idle(self):
+        """Keep wheels stopped until an earlier head action is released."""
+        def check_health():
+            worker_status = self.slam_worker.status() if self.slam_worker is not None else {}
+            if worker_status.get("error"):
+                raise MissionStop(worker_status["error"])
+
+        wait_for_gimbal_idle(
+            self.gimbal, check_health,
+            lambda action: self._set_status("waiting_gimbal_action"),
+        )
 
     def _prepare_gimbal(self, force=False):
         """Physically center the head and wait for SDK release and fresh angles."""
@@ -256,6 +275,7 @@ class DFSExplorer:
         if callable(stop):
             stop()
         self._set_status("recenter_for_heading" if force else "centering_gimbal")
+        self._wait_for_gimbal_idle()
         request_time = time.time()
         action = self.gimbal.recenter(
             pitch_speed=self.settings["gimbal"]["recenter_speed_deg_s"],
@@ -305,7 +325,6 @@ class DFSExplorer:
         )
         current_yaw, _, _ = self._gimbal_sample()
         command_yaw = self._command_yaw(target_yaw, current_yaw)
-        request_time = time.time()
         tolerance = self.settings["gimbal"]["angle_tolerance_deg"]
         pitch_tolerance = self.settings["gimbal"]["pitch_tolerance_deg"]
         # Center yaw without recenter(), which uses a separate SDK action and
@@ -314,6 +333,8 @@ class DFSExplorer:
             command_yaw = 0.0
         previous_status = self.status
         self._set_status("scanning")
+        self._wait_for_gimbal_idle()
+        request_time = time.time()
         action = self.gimbal.moveto(
             pitch=self.settings["gimbal"]["pitch_deg"],
             yaw=command_yaw,
@@ -383,7 +404,9 @@ class DFSExplorer:
                                 target_yaw, measured_yaw,
                                 self.settings["gimbal"]["pitch_deg"], measured_pitch))
                     alignment_retries += 1
+                    self._wait_for_gimbal_idle()
                     request_time = time.time()
+                    command_yaw = self._command_yaw(target_yaw, measured_yaw)
                     action = self.gimbal.moveto(
                         pitch=self.settings["gimbal"]["pitch_deg"], yaw=command_yaw,
                         pitch_speed=30,
@@ -588,17 +611,10 @@ class DFSExplorer:
         self.map.set_exploration_state(self.snapshot())
         return allowed
 
-<<<<<<< Updated upstream
-    def _align_cell(self, node):
-        """Measure selected walls once, then move to one bounded PID target."""
-        def skip(status, reason):
-            result = {"status": status, "reason": reason, "steps": 0,
-=======
     def _align_cell(self, node, target_offset=(0.0, 0.0)):
-        """Center between two walls, or use the configured distance to one wall."""
+        """Measure selected walls once, then move to one bounded PID target."""
         def skip(status, reason, pose=None, steps=0, after=None):
             result = {"status": status, "reason": reason, "steps": steps,
->>>>>>> Stashed changes
                       "target_distance_m": self.settings["alignment"]["wall_distance_m"]}
             with self.lock:
                 self.alignments[node] = result
@@ -694,7 +710,6 @@ class DFSExplorer:
             skip("skipped_map_boundary", f"alignment target for {node} is outside the SLAM map")
             return
         self._set_status("aligning")
-<<<<<<< Updated upstream
         pose = self._drive_holding_current_yaw(*target, kind="alignment")
         actual_x, actual_y = pose[:2]
         displacement = (actual_x - x, actual_y - y)
@@ -703,97 +718,6 @@ class DFSExplorer:
             wall_yaw = angle + math.atan2(delta[1], delta[0])
             along = displacement[0] * math.cos(wall_yaw) + displacement[1] * math.sin(wall_yaw)
             estimated_after[CellWallGrid.DELTA_TO_SIDE[delta]] = round(distance - along, 4)
-=======
-        verified = {}
-        steps = 0
-        moved_on_previous_axis = False
-        for axis, sides in enumerate(selected):
-            if not sides:
-                continue
-            current = {delta: initial_readings[delta] for delta in sides}
-            if moved_on_previous_axis:
-                current = {}
-                for delta in sides:
-                    reading, yaw = self._scan_for_direction(delta)
-                    if reading > self.settings["wall_threshold_mm"]:
-                        skip("skipped_wall_missing", f"selected wall at {node} is no longer detected",
-                             (x, y), steps, verified)
-                        return
-                    distance = reading / 1000.0 + self._sensor_offset(yaw)
-                    current[delta] = (distance, reading, yaw,
-                                      self.map.latest_scan_timestamp)
-            for delta in sides:
-                name = CellWallGrid.SIDE_NAMES[self.DIRECTIONS.index(delta)]
-                verified[name] = round(current[delta][0], 4)
-            while True:
-                worker_status = self.slam_worker.status() if self.slam_worker is not None else None
-                if worker_status is not None and worker_status.get("error"):
-                    raise MissionStop(worker_status["error"])
-                if (worker_status or {}).get("waiting_telemetry") or any(
-                        reading[3] is None or
-                        time.time() - reading[3] > self.settings["max_sample_age_s"]
-                        for reading in current.values()):
-                    current = {}
-                    for delta in sides:
-                        reading, yaw = self._scan_for_direction(delta)
-                        if reading > self.settings["wall_threshold_mm"]:
-                            skip("skipped_wall_missing", f"selected wall at {node} is no longer detected",
-                                 (x, y), steps, verified)
-                            return
-                        distance = reading / 1000.0 + self._sensor_offset(yaw)
-                        current[delta] = (distance, reading, yaw,
-                                          self.map.latest_scan_timestamp)
-                        name = CellWallGrid.SIDE_NAMES[self.DIRECTIONS.index(delta)]
-                        verified[name] = round(distance, 4)
-                if len(sides) == 2:
-                    correction = (current[sides[0]][0] - current[sides[1]][0]) / 2
-                elif sides[0][axis] > 0:
-                    correction = current[sides[0]][0] - desired
-                else:
-                    correction = desired - current[sides[0]][0]
-                correction += target_offset[axis]
-                if abs(correction) <= tolerance:
-                    break
-                # max_shift_m limits each PID move. A large correction is
-                # measured again after the first move instead of failing.
-                step = max(-max_shift, min(max_shift, correction))
-                step_x = step * (math.cos(angle) if axis == 0 else -math.sin(angle))
-                step_y = step * (math.sin(angle) if axis == 0 else math.cos(angle))
-                target = (x + step_x, y + step_y)
-                if not self.map.contains_world(*target):
-                    skip("skipped_map_boundary", f"alignment target for {node} is outside the SLAM map",
-                         (x, y), steps, verified)
-                    return
-                pose = self._drive_holding_current_yaw(*target, kind="alignment")
-                x, y = pose[:2]
-                steps += 1
-                moved_on_previous_axis = True
-                actual = {}
-                for delta in sides:
-                    reading, yaw = self._scan_for_direction(delta)
-                    if reading > self.settings["wall_threshold_mm"]:
-                        skip("skipped_wall_missing", f"selected wall at {node} is no longer detected",
-                             (x, y), steps, verified)
-                        return
-                    distance = reading / 1000.0 + self._sensor_offset(yaw)
-                    actual[delta] = (distance, reading, yaw,
-                                     self.map.latest_scan_timestamp)
-                    name = CellWallGrid.SIDE_NAMES[self.DIRECTIONS.index(delta)]
-                    verified[name] = round(distance, 4)
-                if len(sides) == 2:
-                    remaining = (actual[sides[0]][0] - actual[sides[1]][0]) / 2
-                elif sides[0][axis] > 0:
-                    remaining = actual[sides[0]][0] - desired
-                else:
-                    remaining = desired - actual[sides[0]][0]
-                remaining += target_offset[axis]
-                if (abs(remaining) > tolerance and
-                        abs(remaining) >= abs(correction) - .005):
-                    skip("stalled", f"remaining correction {remaining:.3f} m at {node}",
-                         (x, y), steps, verified)
-                    return
-                current = actual
->>>>>>> Stashed changes
         with self.lock:
             self.cell_targets[node] = (actual_x, actual_y)
             result["status"] = "partial" if fraction < 1.0 else "moved"

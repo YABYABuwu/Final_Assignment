@@ -6,6 +6,7 @@ import time
 from src.mission_stop import MissionStop
 from src.slam import _wrap_degrees
 from src.targets import TargetTracker
+from src.gimbal_control import wait_for_gimbal_idle
 
 
 def _nearest_candidate(visible, color, shape, center):
@@ -192,6 +193,23 @@ class WallTargetInspector:
             self.chassis.stop()
             time.sleep(.05)
 
+    def _wait_for_gimbal_idle(self, gimbal, deadline):
+        def check_health():
+            self._check_deadline(deadline, "waiting for previous gimbal action")
+            self._health()
+
+        def on_wait(action):
+            self.active_action = action
+            if self.active_cell is not None:
+                self._progress(self.active_cell, self.active_delta,
+                               "waiting_target_action", action_state=action.state)
+
+        wait_for_gimbal_idle(
+            gimbal, check_health, on_wait,
+            remaining_timeout=lambda: max(.001, deadline - time.monotonic()),
+        )
+        self.active_action = None
+
     def _point(
         self,
         pitch,
@@ -235,6 +253,9 @@ class WallTargetInspector:
                     ),
                 )
 
+            self._wait_for_gimbal_idle(gimbal, deadline)
+            request_time = time.time()
+            self.command_detail["requested_at"] = request_time
             if recenter:
                 action = gimbal.recenter(
                     pitch_speed=30,
@@ -339,9 +360,8 @@ class WallTargetInspector:
                 )
                 reported_angle_state = waiting_state
 
-            if (
-                released
-                and timestamp > request_time
+            angles_aligned = (
+                timestamp > request_time
                 and (
                     abs(measured_pitch - pitch)
                     <= self.settings["gimbal"]["pitch_tolerance_deg"]
@@ -350,6 +370,11 @@ class WallTargetInspector:
                     abs(_wrap_degrees(measured_yaw - yaw))
                     <= self.settings["gimbal"]["angle_tolerance_deg"]
                 )
+            )
+
+            if (
+                released
+                and angles_aligned
             ):
                 self.commanded_angles = (pitch, yaw)
 
@@ -713,10 +738,20 @@ class WallTargetInspector:
                 "wall camera cannot reach target yaw"
             )
 
-        inspection_yaw = min(
-            reachable,
-            key=lambda value: abs(value - original_yaw),
-        )
+        if abs(abs(_wrap_degrees(target_yaw)) - 180.0) <= 30.0 and abs(original_yaw) < 80.0:
+            neg_candidates = [a for a in reachable if a < 0]
+            if neg_candidates:
+                inspection_yaw = max(neg_candidates)
+            else:
+                inspection_yaw = min(
+                    reachable,
+                    key=lambda value: abs(value - original_yaw),
+                )
+        else:
+            inspection_yaw = min(
+                reachable,
+                key=lambda value: abs(value - original_yaw),
+            )
 
         self.slam_worker.pause_mapping()
 
