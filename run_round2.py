@@ -9,6 +9,9 @@ Usage:
   python run_round2.py --targets "[(3,2), (2,1)]"
 """
 
+import os
+os.environ["MPLBACKEND"] = "Agg"
+
 import argparse
 import ast
 import json

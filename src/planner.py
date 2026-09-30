@@ -575,6 +575,9 @@ class MultiTargetPlanner:
 
 def plot_mission_map(grid_map, plan, output_path=None, title="Round 2 Shortest Path & Target Mission"):
     """Render a visual map with maze walls, planned path, shooting standpoints, and targets."""
+    import matplotlib
+    if output_path:
+        matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from matplotlib.patches import Rectangle, Circle, FancyArrowPatch
 
@@ -753,7 +756,7 @@ def plot_mission_map(grid_map, plan, output_path=None, title="Round 2 Shortest P
 
     if output_path:
         plt.savefig(output_path, bbox_inches="tight")
-        plt.close()
+        plt.close("all")
     else:
         plt.show()
 
