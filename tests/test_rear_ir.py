@@ -43,6 +43,10 @@ class RearIRTests(unittest.TestCase):
         # These tests inject adapter callbacks, so use stream IO and fixed
         # polarity instead of the hardware-only direct read and calibration.
         for end in ("rear_ir", "front_ir"):
+            # Legacy recovery regression fixtures; directional mode is exercised
+            # with all four sensors and a gimbal guard in test_directional_recovery.
+            self.config[end].update(recovery_mode="adaptive", recovery_max_m=.03,
+                                    recovery_total_max_m=.24)
             self.config[end]["io_read_mode"] = "stream"
             self.config[end]["auto_calibrate_io"] = False
         for side in ("right", "left"):

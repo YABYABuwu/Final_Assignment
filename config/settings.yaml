@@ -90,11 +90,11 @@ rear_ir:
   max_age_s: 0.5
 
   recovery_speed_m_s: 0.08
-  recovery_max_m: 0.03
+  recovery_max_m: 0.02
   recovery_max_attempts: 8
-  recovery_total_max_m: 0.24
+  recovery_total_max_m: 0.16
   recovery_clear_samples: 3
-  recovery_mode: "adaptive"
+  recovery_mode: "directional"
 
   forward_tof_clear_mm: 250
   forward_tof_max_age_s: 0.5
@@ -116,11 +116,11 @@ front_ir:
   max_age_s: 0.5
 
   recovery_speed_m_s: 0.08
-  recovery_max_m: 0.03
+  recovery_max_m: 0.02
   recovery_max_attempts: 8
-  recovery_total_max_m: 0.24
+  recovery_total_max_m: 0.16
   recovery_clear_samples: 3
-  recovery_mode: "adaptive"
+  recovery_mode: "directional"
 
   direct_io_fallback: true  # Confirm suspected DDS contacts with get_io before recovery.
   direct_fallback_cache_s: 0.2
@@ -151,7 +151,7 @@ exploration:
   ir_lane:
     enabled: true
     min_shift_m: 0.005 # Ignore lateral recovery smaller than 5 mm.
-    max_offset_m: 0.10 # Total offset per edge, not an allowance per recovery.
+    max_offset_m: 0.16 # Total offset per edge, not an allowance per recovery.
   enabled: true       # เปิดหลังสอบเทียบตำแหน่งแกน yaw/pivot และระยะหัว ToF; true = เริ่ม SLAM + DFS และสั่งรถเดิน
   position_coordinate_system: 1 # ผูกแผนที่กับพิกัดตั้งแต่เปิดหุ่นยนต์ เพื่อให้โหลดแผนที่เดิมได้ในรอบเปิดเครื่องเดียวกัน
   step_m: 0.60            # ขนาดช่องกริดกำแพง และระยะเดินระหว่างศูนย์กลางช่อง
@@ -194,6 +194,8 @@ exploration:
     movement_angle_tolerance_deg: 5 # ขณะรถวิ่งยอมให้กิมบอลคลาดเพิ่มจากแรงสั่น/PID
     movement_alignment_miss_samples: 3 # ต้องคลาดต่อเนื่องหลาย sample ก่อนหยุด mission
   target_inspection:
+    wait_timeout_s: 5.0     # เวลารอ telemetry ก่อนเริ่มคำสั่ง (วินาที)
+    gimbal_wait_timeout_s: 8.0 # เวลารอ action และมุมหลังส่งคำสั่งกิมบอล (วินาที)
     enabled: true           # ตรวจทุกขอบที่เป็นกำแพงหนึ่งครั้งขณะ DFS หยุดนิ่ง
     blind_aim: true         # วิธีที่ 1: เล็งพิกัดเป้าหมายจากเฟรมที่ยืนยันแล้วยิงทันที ไม่รอเช็กภาพซ้ำตอนเงย (แก้ปัญหาปลายกิมบอลบังเป้า)
     pitch_deg: -20.0        # มุมก้มกิมบอล -20.0° เพื่อส่องหาเป้าหมายระดับต่ำบนผนัง

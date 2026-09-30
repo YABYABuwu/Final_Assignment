@@ -37,69 +37,202 @@ class Dashboard:
         self.camera_targets = []
         self.frame_number = 0
         self.camera_error = None
+        self.camera_health = {
+            "state": "waiting_frame",
+            "skipped_reads": 0,
+            "recovered_gaps": 0,
+            "last_frame_time": None,
+            "last_skip_reason": None,
+        }
+        self.logger.camera_health = self.camera_health
         self.mission_status = "Ready"
         self.camera_thread = None
         self.server_thread = None
         self.server = None
         self.camera_started = False
 
+    def _skip_camera_frame(self, reason):
+        """Discard a missing/broken frame without stopping the dashboard."""
+        with self.frame_changed:
+            self.camera_health["state"] = "waiting_frame"
+            self.camera_health["skipped_reads"] += 1
+            self.camera_health["last_skip_reason"] = reason
+
+            # Do not give an old inspection image to the target detector.
+            self.latest_frame = None
+            self.camera_targets = []
+
+            # Keep the last JPEG for display while waiting for a new image.
+            self.frame_changed.notify_all()
+
     def _camera_loop(self):
         """Only this thread reads frames from the SDK camera."""
         import cv2
 
         period = 1 / self.settings["max_fps"]
+
         while self.running.is_set():
             started = time.monotonic()
+
             try:
-                image = self.camera.read_cv2_image(timeout=1, strategy="newest")
-                if image is not None:
+                image = self.camera.read_cv2_image(
+                    timeout=min(period, .02),
+                    strategy="newest",
+                )
+
+                if image is None:
+                    self._skip_camera_frame(
+                        "no decoded frame available"
+                    )
+                else:
+                    shape = getattr(image, "shape", None)
+
+                    if shape is not None and (
+                        len(shape) != 3
+                        or shape[2] != 3
+                        or shape[0] <= 0
+                        or shape[1] <= 0
+                    ):
+                        raise cv2.error(
+                            "invalid decoded BGR frame"
+                        )
+
                     annotated = image
                     camera_targets = []
-                    if self.target_settings is not None and self.target_settings["enabled"]:
+
+                    if (
+                        self.target_settings is not None
+                        and self.target_settings["enabled"]
+                    ):
                         from src.targets import detect
+
                         selected = self.target_settings["selected"]
-                        selected = None if selected == "all" else {
-                            tuple(pair.split(":")) for pair in selected}
-                        detections = detect(image, self.target_settings["min_area_fraction"],
-                                            selected, self.color_ranges)
+                        selected = (
+                            None
+                            if selected == "all"
+                            else {
+                                tuple(pair.split(":"))
+                                for pair in selected
+                            }
+                        )
+
+                        detections = detect(
+                            image,
+                            self.target_settings["min_area_fraction"],
+                            selected,
+                            self.color_ranges,
+                        )
+
                         annotated = image.copy()
                         height, width = image.shape[:2]
-                        box_colors = {"red": (55, 55, 255), "green": (80, 240, 80),
-                                      "yellow": (60, 220, 255), "blue": (255, 140, 70)}
+
+                        box_colors = {
+                            "red": (55, 55, 255),
+                            "green": (80, 240, 80),
+                            "yellow": (60, 220, 255),
+                            "blue": (255, 140, 70),
+                        }
+
                         for item in detections:
-                            x, y, w, h = cv2.boundingRect(item.contour)
+                            x, y, w, h = cv2.boundingRect(
+                                item.contour
+                            )
                             color = box_colors[item.color]
-                            cv2.rectangle(annotated, (x, y), (x + w, y + h), color, 2)
-                            cv2.putText(annotated, f"{item.color} {item.shape}",
-                                        (x, max(15, y - 5)), cv2.FONT_HERSHEY_SIMPLEX,
-                                        .5, color, 1, cv2.LINE_AA)
-                            camera_targets.append({"color": item.color, "shape": item.shape,
-                                                   "center": list(item.center),
-                                                   "box": [x, y, w, h],
-                                                   "area_fraction": round(item.area / (width * height), 4)})
+
+                            cv2.rectangle(
+                                annotated,
+                                (x, y),
+                                (x + w, y + h),
+                                color,
+                                2,
+                            )
+
+                            cv2.putText(
+                                annotated,
+                                f"{item.color} {item.shape}",
+                                (x, max(15, y - 5)),
+                                cv2.FONT_HERSHEY_SIMPLEX,
+                                .5,
+                                color,
+                                1,
+                                cv2.LINE_AA,
+                            )
+
+                            camera_targets.append({
+                                "color": item.color,
+                                "shape": item.shape,
+                                "center": list(item.center),
+                                "box": [x, y, w, h],
+                                "area_fraction": round(
+                                    item.area / (width * height),
+                                    4,
+                                ),
+                            })
+
                     ok, encoded = cv2.imencode(
-                        ".jpg", annotated,
-                        [cv2.IMWRITE_JPEG_QUALITY, self.settings["jpeg_quality"]],
+                        ".jpg",
+                        annotated,
+                        [
+                            cv2.IMWRITE_JPEG_QUALITY,
+                            self.settings["jpeg_quality"],
+                        ],
                     )
+
                     if ok:
                         with self.frame_changed:
+                            if (
+                                self.camera_health["state"]
+                                == "waiting_frame"
+                                and (
+                                    self.camera_health["last_frame_time"]
+                                    is not None
+                                )
+                            ):
+                                self.camera_health["recovered_gaps"] += 1
+
+                            self.camera_health["state"] = "ready"
+                            self.camera_health["last_frame_time"] = (
+                                time.time()
+                            )
+
                             self.latest_jpeg = encoded.tobytes()
-                            self.latest_frame = image.copy() if hasattr(image, "copy") else image
+                            self.latest_frame = (
+                                image.copy()
+                                if hasattr(image, "copy")
+                                else image
+                            )
                             self.camera_targets = camera_targets
                             self.frame_number += 1
                             self.frame_changed.notify_all()
-            except Empty:
-                pass
+                    else:
+                        self._skip_camera_frame(
+                            "JPEG encoding rejected the frame"
+                        )
+
+            except (Empty, OSError, cv2.error) as error:
+                # Temporary frame/network/decoding failure:
+                # skip this read and request the newest frame next.
+                self._skip_camera_frame(
+                    str(error) or type(error).__name__
+                )
+
             except Exception as error:
+                # Unexpected programming errors remain visible.
                 self.camera_error = str(error)
+                self.camera_health["state"] = "error"
                 self.running.clear()
+
                 with self.frame_changed:
                     self.frame_changed.notify_all()
+
                 break
-            remaining = period - (time.monotonic() - started)
+
+            remaining = period - (
+                time.monotonic() - started
+            )
             if remaining > 0:
                 time.sleep(remaining)
-
+                
     def wait_for_frame(self, after_number=0, check_health=None):
         """Return a fresh BGR frame without starting a second SDK camera reader."""
         with self.frame_changed:
@@ -117,35 +250,73 @@ class Dashboard:
             return self.frame_number
 
     def snapshot(self):
-        """Build a JSON friendly snapshot without touching the camera or disk."""
+        """Build a JSON-friendly snapshot without camera or disk reads."""
         with self.frame_changed:
-            camera_ready = self.latest_jpeg is not None
+            camera_health = dict(self.camera_health)
+            camera_ready = (
+                camera_health["state"] == "ready"
+                and self.latest_frame is not None
+            )
             camera_targets = list(self.camera_targets)
+
         streams = {}
         for name in STREAMS:
-            if self.logger.stream_settings.get(name, {}).get("enabled"):
-                streams[name] = self.logger.get_latest(name, max_age_s=2)
+            if self.logger.stream_settings.get(
+                name, {}
+            ).get("enabled"):
+                streams[name] = self.logger.get_latest(
+                    name,
+                    max_age_s=2,
+                )
+
+        last_frame_time = camera_health["last_frame_time"]
+
         target_detection = {
             "enabled": bool(self.target_settings),
             "detections": [
                 {
                     "color": t.get("color"),
                     "shape": t.get("shape"),
-                    "center_px": t.get("center", [320, 180]),
+                    "center_px": t.get(
+                        "center", [320, 180]
+                    ),
                     "center_offset_norm": [
-                        round((t.get("center", [320, 180])[0] - 320) / 320.0, 4),
-                        round((t.get("center", [320, 180])[1] - 180) / 180.0, 4),
+                        round(
+                            (
+                                t.get("center", [320, 180])[0]
+                                - 320
+                            ) / 320.0,
+                            4,
+                        ),
+                        round(
+                            (
+                                t.get("center", [320, 180])[1]
+                                - 180
+                            ) / 180.0,
+                            4,
+                        ),
                     ],
-                    "area_px2": t.get("area_fraction", 0.0) * (640 * 360),
+                    "area_px2": (
+                        t.get("area_fraction", 0.0)
+                        * (640 * 360)
+                    ),
                     "stability_hits": 3,
                     "stability_required": 3,
                     "confirmed": True,
                 }
                 for t in camera_targets
             ],
-            "age_ms": 50 if camera_ready else None,
+            "age_ms": (
+                round(
+                    max(0, time.time() - last_frame_time)
+                    * 1000
+                )
+                if last_frame_time is not None
+                else None
+            ),
             "error": self.camera_error,
         }
+
         return {
             "streams": streams,
             "dropped_csv_rows": self.logger.dropped_rows,
@@ -153,13 +324,31 @@ class Dashboard:
             "camera_targets": camera_targets,
             "target_detection": target_detection,
             "camera_error": self.camera_error,
+            "camera_health": camera_health,
             "mission_status": self.mission_status,
             "round2_navigation": getattr(self.logger, "round2_navigation", None),
+            "round2_alignment": getattr(self.logger, "round2_alignment", None),
             "motion_settings": self.motion_settings,
-            "rear_ir": self.rear_ir.snapshot() if self.rear_ir is not None else {"enabled": False},
-            "front_ir": self.front_ir.snapshot() if self.front_ir is not None else {"enabled": False},
-            "slam": self.slam_worker.status() if self.slam_worker is not None else None,
-            "exploration": self.explorer.snapshot() if self.explorer is not None else None,
+            "rear_ir": (
+                self.rear_ir.snapshot()
+                if self.rear_ir is not None
+                else {"enabled": False}
+            ),
+            "front_ir": (
+                self.front_ir.snapshot()
+                if self.front_ir is not None
+                else {"enabled": False}
+            ),
+            "slam": (
+                self.slam_worker.status()
+                if self.slam_worker is not None
+                else None
+            ),
+            "exploration": (
+                self.explorer.snapshot()
+                if self.explorer is not None
+                else None
+            ),
         }
 
     def map_snapshot(self):

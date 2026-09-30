@@ -204,6 +204,7 @@ def load_config(path=DEFAULT_CONFIG):
         mode = ir.get("recovery_mode")
 
         allowed_recovery_modes = (
+            "directional",
             "adaptive",
             "cardinal",
             "diagonal",
@@ -256,6 +257,9 @@ def load_config(path=DEFAULT_CONFIG):
             if not streams.get(name, {}).get("enabled"):
                 raise ValueError(f"mission needs logging.streams.{name}.enabled: true")
 
+    directional = [config[k].get("recovery_mode") == "directional" for k in ("front_ir", "rear_ir")]
+    if any(directional) and (not all(directional) or not all(config[k]["enabled"] for k in ("front_ir", "rear_ir"))):
+        raise ValueError("directional recovery requires enabled front_ir and rear_ir with the same mode")
     exploration = config["exploration"]
     if not isinstance(exploration.get("enabled"), bool):
         raise ValueError("exploration.enabled must be true or false")
@@ -451,7 +455,7 @@ def load_config(path=DEFAULT_CONFIG):
     aim_settle = target.get("aim_settle_s", 0.15)
     if type(aim_settle) not in (int, float) or not math.isfinite(aim_settle) or aim_settle < 0:
         raise ValueError("exploration.target_inspection.aim_settle_s must be a non-negative number")
-    for name in ("scan_yaw_speed_deg_s", "aim_yaw_speed_deg_s"):
+    for name in ("scan_yaw_speed_deg_s", "aim_yaw_speed_deg_s", "wait_timeout_s", "gimbal_wait_timeout_s"):
         if name in target:
             val = target[name]
             if type(val) not in (int, float) or not math.isfinite(val) or val <= 0:

@@ -19,6 +19,7 @@ from pathlib import Path
 import time
 
 from src.config_loader import load_config
+from src.chassis import grid_motion_settings
 from src.planner import GridMap, MultiTargetPlanner, plot_mission_map, find_path_bfs, find_path_astar
 from src.mission_stop import MissionStop
 from src.sound_player import play_startup_sound
@@ -47,8 +48,8 @@ def main():
     parser.add_argument("--no-allow-same-cell", action="store_false", dest="allow_same_cell",
                         help="Disallow shooting from the same tile as the target")
     parser.add_argument("--standoff", type=float, default=0.20, help="Standoff distance in meters from cell center when shooting in same cell (accounts for 20cm gimbal length)")
-    parser.add_argument("--speed", type=float, default=0.25,
-                        help="Movement speed in m/s (default 0.25 m/s, slightly faster than exploration 0.20 m/s)")
+    parser.add_argument("--speed", type=float, default=None,
+                        help="Optional speed in m/s; default matches DFS, capped by motion.max_speed_m_s")
     parser.add_argument("--return-to-start", action="store_true", help="Return to starting cell after shooting")
     parser.add_argument("--algorithm", default="bfs", choices=["bfs", "astar"], help="Search algorithm")
     parser.add_argument("--no-skip-unreachable", action="store_false", dest="skip_unreachable", default=True,
@@ -194,6 +195,7 @@ def main():
     # Physical Robot Execution
     print("\nConnecting to RoboMaster EP...")
     config = load_config(project_dir / "config" / "settings.yaml")
+    motion_settings = grid_motion_settings(config, args.speed)
     log_settings = config["logging"].copy()
     log_settings["directory"] = project_dir / log_settings["directory"]
     if "exploration" in config and "position_coordinate_system" in config["exploration"]:
@@ -205,6 +207,7 @@ def main():
     from src.logger import SensorLogger
     from src.rear_ir import RearIRBumper, FrontIRBumper
     from src.round2_navigation import Round2Navigator
+    from src.round2_alignment import Round2Aligner
     from src.target_marker import fire_infrared
 
     def sdk_conn_type(name):
@@ -227,8 +230,6 @@ def main():
         logger = SensorLogger(ep_robot, log_settings)
         logger.start()
 
-        motion_settings = config["motion"].copy()
-        motion_settings["max_speed_m_s"] = args.speed
         logger.motion_settings = {
             "max_speed_m_s": motion_settings["max_speed_m_s"],
             "braking_decel_m_s2": motion_settings["braking_decel_m_s2"],
@@ -245,9 +246,6 @@ def main():
             logger.front_ir_recoveries = chassis.front_ir.events
 
         gimbal = ChassisRelativeGimbal(ep_robot.gimbal)
-        _recenter_action = gimbal.recenter()
-        if _recenter_action is not None:
-            _recenter_action.wait_for_completed(timeout=5.0)
 
         print("Waiting for telemetry sensors...")
         logger.wait_for("position", 5.0)
@@ -316,12 +314,28 @@ def main():
         navigator = Round2Navigator(
             chassis, grid_map, config["exploration"]["ir_lane"],
             (robot_origin_x - start_map_x, robot_origin_y - start_map_y),
-            on_change=lambda state: setattr(logger, "round2_navigation", state))
+            on_change=lambda state: setattr(logger, "round2_navigation", state),
+            heading_deg=float(init_pose[2]))
         # Read actual chassis heading at startup — must not default to 0.0 because
         # the map base_pose yaw (~97°) means the grid axes are rotated relative to
         # the robot's odometry frame. Using 0.0 causes every gimbal angle to be
         # off by ~97°, making T1/T3 miss and T2 accidentally hit the wrong target.
         body_yaw = float(init_pose[2]) if init_pose and len(init_pose) >= 3 else 0.0
+        aligner = Round2Aligner(
+            chassis, gimbal, logger, grid_map, config["exploration"], navigator.translation,
+            navigator.heading_deg,
+            on_change=lambda state: setattr(logger, "round2_alignment", state))
+        dashboard.mission_status = "Round 2: aligning at start using mapped walls"
+        if config["front_ir"].get("recovery_mode") == "directional":
+            from src.directional_recovery import DirectionalToF
+            chassis.directional_tof = DirectionalToF(aligner)
+        start_pose = aligner.align(start_cell, "startup")
+        # The centered starting position establishes this run's map translation.
+        robot_origin_x, robot_origin_y = start_pose[:2]
+        navigator.translation = (robot_origin_x - start_map_x, robot_origin_y - start_map_y)
+        aligner.translation = navigator.translation
+        aligner.base_pose = (grid_map.base_pose[0] + navigator.translation[0],
+                             grid_map.base_pose[1] + navigator.translation[1], grid_map.base_pose[2])
         for step_idx, cell in enumerate(plan["full_path"]):
             dashboard.mission_status = "Round 2: moving to {}".format(cell)
             world_x, world_y = plan["waypoints"][step_idx]
@@ -342,6 +356,13 @@ def main():
                 body_yaw = float(pose[2])
 
             if step_idx in actions_by_step:
+                dashboard.mission_status = "Round 2: aligning before shooting using mapped walls"
+                center_x, center_y = grid_map.cell_to_world(cell)
+                pose = aligner.align(
+                    cell, "before_shooting",
+                    target_offset_world=(world_x - center_x, world_y - center_y),
+                    last_ir_lane=navigator.last_lane)
+                body_yaw = float(pose[2])
                 for action in actions_by_step[step_idx]:
                     target_id = action["target_id"]
                     target_pos = action["target_pos"]

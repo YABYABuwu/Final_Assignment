@@ -89,6 +89,24 @@ class RunStore:
         if summary.get("dropped_csv_rows", 0):
             issues.append({"level": "warning", "time_s": None,
                            "message": f"CSV queue dropped {summary['dropped_csv_rows']} rows"})
+        
+        camera_health = summary.get("camera_health") or {}
+
+        if camera_health.get("skipped_reads", 0):
+            issues.append({
+                "level": "warning",
+                "time_s": None,
+                "message": (
+                    "Camera skipped {} unavailable/broken reads; "
+                    "recovered {} gaps. Last: {}"
+                ).format(
+                    camera_health["skipped_reads"],
+                    camera_health.get("recovered_gaps", 0),
+                    camera_health.get("last_skip_reason")
+                    or "unknown",
+                ),
+            })
+            
         for error in summary.get("logger_errors", []):
             issues.append({"level": "error", "time_s": None, "message": str(error)})
         for cell, alignment in (summary.get("exploration") or {}).get("alignments", {}).items():
@@ -102,6 +120,11 @@ class RunStore:
         motion_stop = (summary.get("exploration") or {}).get("last_motion_stop") or {}
         lane = (summary.get("exploration") or {}).get("last_ir_lane") or {}
         round2_lane = (summary.get("round2_navigation") or {}).get("last_ir_lane") or {}
+        for alignment in (summary.get("round2_alignment") or {}).get("events", []):
+            if alignment.get("status") == "stopped":
+                issues.append({"level": "warning", "time_s": None,
+                               "message": "Round 2 alignment {} at {}: {}".format(
+                                   alignment.get("phase"), alignment.get("cell"), alignment.get("error"))})
         if round2_lane.get("status") == "aborted":
             issues.append({"level": "warning", "time_s": None,
                            "message": "Round 2 IR lane {}: aborted (not retained)".format(
@@ -115,6 +138,9 @@ class RunStore:
                            "message": "Emergency stop at cell {} was {:.3f} m from planned center".format(
                                           motion_stop.get("center_cell"),
                                           motion_stop.get("planned_center_error_m", 0.0))})
+        if motion_stop.get("wall_confirmed") is False:
+            issues.append({"level": "warning", "time_s": None,
+                           "message": "Emergency obstacle was not confirmed as a grid wall; topology was preserved."})
         for inspection in (summary.get("exploration") or {}).get("wall_inspections", []):
             if inspection.get("status") == "stopped":
                 issues.append({"level": "error", "time_s": None,

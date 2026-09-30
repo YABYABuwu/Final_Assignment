@@ -1331,7 +1331,8 @@ class ExplorationTests(unittest.TestCase):
         self.assertAlmostEqual(explorer.cell_targets[(0, 0)][0], 0)
         self.assertAlmostEqual(explorer.last_motion_stop["planned_center_error_m"], .10)
         self.assertFalse(explorer.last_motion_stop["center_confirmed"])
-        self.assertEqual(explorer.wall_grid.state((0, 0), (1, 0)), "wall")
+        self.assertFalse(explorer.last_motion_stop["wall_confirmed"])
+        self.assertEqual(explorer.wall_grid.state((0, 0), (1, 0)), "unknown")
 
     def test_grid_emergency_stop_on_return_uses_return_direction(self):
         class ReturnChassis(SimulatedChassis):

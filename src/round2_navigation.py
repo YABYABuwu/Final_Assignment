@@ -8,12 +8,14 @@ from src.mission_stop import MissionStop
 
 
 class Round2Navigator:
-    def __init__(self, chassis, grid_map, settings, translation, on_change=None):
+    def __init__(self, chassis, grid_map, settings, translation, on_change=None,
+                 heading_deg=None):
         self.chassis = chassis
         self.grid = grid_map
         self.settings = settings
         self.translation = tuple(translation)
         self.on_change = on_change
+        self.heading_deg = heading_deg
         self.lanes = {}
         self.last_lane = None
         if settings.get("enabled", False) and settings["max_offset_m"] >= grid_map.cell_size_m / 2:
@@ -22,6 +24,7 @@ class Round2Navigator:
 
     def snapshot(self):
         return copy.deepcopy({"enabled": self.settings.get("enabled", False),
+                              "travel_heading_deg": self.heading_deg,
                               "ir_lanes": [value for _, value in sorted(self.lanes.items())],
                               "last_ir_lane": self.last_lane})
 
@@ -46,7 +49,7 @@ class Round2Navigator:
                 self._publish()
                 raise MissionStop("Round 2 route edge is not open in the loaded map")
         if not self.settings.get("enabled", False) or source is None or source == destination:
-            return self.chassis.move_to(*target, yaw=None)
+            return self.chassis.move_to(*target, yaw=self.heading_deg, disable_timeout=True)
 
         edge = tuple(sorted((source, destination)))
         saved = self.lanes.get(edge)
@@ -86,7 +89,8 @@ class Round2Navigator:
         try:
             if not contains_world(*current_target):
                 raise MissionStop("Round 2 IR lane target is outside the route cells")
-            pose = self.chassis.move_to(*current_target, yaw=None, on_ir_recovered=recovered)
+            pose = self.chassis.move_to(*current_target, yaw=self.heading_deg,
+                                       disable_timeout=True, on_ir_recovered=recovered)
             # Only completed traversal can teach a lane, never a partial stop.
             if (pose is None or not all(math.isfinite(value) for value in pose[:2]) or
                     math.hypot(pose[0] - current_target[0], pose[1] - current_target[1]) >

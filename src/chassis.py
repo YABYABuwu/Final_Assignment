@@ -13,6 +13,17 @@ def angle_error(target, current):
     return (target - current + 180) % 360 - 180
 
 
+def grid_motion_settings(config, speed_override=None):
+    """Use the same PID, heading source and default speed for both rounds."""
+    settings = config["motion"].copy()
+    speed = config["exploration"]["max_speed_m_s"] if speed_override is None else speed_override
+    if type(speed) not in (int, float) or not math.isfinite(speed) or speed <= 0:
+        raise ValueError("movement speed must be positive and finite")
+    settings["max_speed_m_s"] = min(settings["max_speed_m_s"], speed)
+    settings["heading_source"] = config["exploration"]["heading_source"]
+    return settings
+
+
 class ChassisController:
     def __init__(self, robot, logger, settings):
         self.chassis = robot.chassis
@@ -29,6 +40,7 @@ class ChassisController:
         self.position_sample_time = None
         self.rear_ir = None
         self.front_ir = None
+        self.directional_tof = None
 
     def reset_heading(self):
         """Use the current heading as the reference on the next move_to call."""
@@ -322,6 +334,10 @@ class ChassisController:
     ):
         """Recover using distance measured from position telemetry."""
         settings = bumper.settings
+        if settings.get("recovery_mode") == "directional":
+            from src.directional_recovery import recover
+            return recover(self, bumper, side, period, deadline, abort_event, pause_if,
+                           recovery_budget if recovery_budget is not None else {})
         forward = settings["recovery_speed_m_s"]
 
         if recovery_budget is None:
@@ -680,6 +696,8 @@ class ChassisController:
                 "traveled_m": 0.0,
             },
         }
+        if self.directional_tof is not None:
+            self.directional_tof.invalidate()
         if yaw is not None:
             self.heading_reference = yaw
         try:
@@ -709,6 +727,21 @@ class ChassisController:
                     previous = time.monotonic()
                     time.sleep(period)
                     continue
+                travel_margin = None
+                if self.directional_tof is not None and stop_if is None and math.hypot(x-pose[0], y-pose[1]) > self.settings["position_tolerance_m"]:
+                    a = math.radians(pose[2])
+                    dx, dy = x-pose[0], y-pose[1]
+                    margin = self.directional_tof.clearance(dx*math.cos(a)+dy*math.sin(a), -dx*math.sin(a)+dy*math.cos(a))
+                    if margin is None:
+                        self.stop()
+                        time.sleep(period)
+                        continue
+                    travel_margin = margin
+                    pose = self.get_pose()
+                    if pose is None:
+                        self.stop()
+                        time.sleep(period)
+                        continue
                 if stop_if is not None and stop_if(pose):
                     return pose
                 if stop_if is not None:
@@ -794,6 +827,17 @@ class ChassisController:
                         if target_yaw is not None else 0)
                 blocked = [bumper for bumper in (self.front_ir, self.rear_ir)
                            if bumper is not None and bumper.blocks_motion(vx_robot, vy_robot, turn)]
+                if self.directional_tof is not None:
+                    blocked = []
+                    for bumper in (self.front_ir, self.rear_ir):
+                        if bumper is None:
+                            raise MissionStop("directional recovery requires both front and rear IR")
+                        sides = bumper.snapshot()["sides"]
+                        hits = [k for k in ("left", "right") if sides[k]["detected"] is True]
+                        missing = any(sides[k]["detected"] is None for k in ("left", "right"))
+                        if missing or hits:
+                            bumper.last_block = "waiting_data" if missing else "both" if len(hits) == 2 else hits[0]
+                            blocked.append(bumper)
                 if blocked:
                     self.stop()
                     bumper = next((item for item in blocked if item.last_block != "waiting_data"), None)
@@ -853,6 +897,8 @@ class ChassisController:
                     previous = time.monotonic()
                     time.sleep(period)
                     continue
+                if travel_margin is not None and travel_margin <= 0:
+                    raise MissionStop("directional ToF stopped motion at safe edge distance")
                 self.chassis.drive_speed(x=vx_robot, y=vy_robot, z=turn)
                 self.commanded_lateral_m_s = vy_robot
                 time.sleep(period)

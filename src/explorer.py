@@ -284,6 +284,10 @@ class DFSExplorer:
                 "gimbal recenter did not reach center: yaw {:.1f}, pitch {:.1f}".format(
                     yaw, pitch))
 
+    def _latest_alignment_scan(self):
+        return (self.map.latest_scan_timestamp, self.map.latest_gimbal_yaw_deg,
+                self.map.latest_range_mm)
+
     def _scan_for_direction(self, delta, yaw_offset_deg=0.0, median_window=None):
         """Point the single ToF toward a candidate cell and wait for its new scan."""
         stop = getattr(self.chassis, "stop", None)
@@ -395,9 +399,7 @@ class DFSExplorer:
                     samples.clear()
                     continue
 
-            scan_timestamp = self.map.latest_scan_timestamp
-            scan_yaw = self.map.latest_gimbal_yaw_deg
-            scan_range = self.map.latest_range_mm
+            scan_timestamp, scan_yaw, scan_range = self._latest_alignment_scan()
             scan_ready = (aligned and scan_timestamp is not None and
                     scan_timestamp > request_time and
                     scan_timestamp > last_sample_timestamp and
@@ -586,10 +588,17 @@ class DFSExplorer:
         self.map.set_exploration_state(self.snapshot())
         return allowed
 
+<<<<<<< Updated upstream
     def _align_cell(self, node):
         """Measure selected walls once, then move to one bounded PID target."""
         def skip(status, reason):
             result = {"status": status, "reason": reason, "steps": 0,
+=======
+    def _align_cell(self, node, target_offset=(0.0, 0.0)):
+        """Center between two walls, or use the configured distance to one wall."""
+        def skip(status, reason, pose=None, steps=0, after=None):
+            result = {"status": status, "reason": reason, "steps": steps,
+>>>>>>> Stashed changes
                       "target_distance_m": self.settings["alignment"]["wall_distance_m"]}
             with self.lock:
                 self.alignments[node] = result
@@ -640,7 +649,7 @@ class DFSExplorer:
             return
 
         corrections = []
-        for sides in selected:
+        for axis, sides in enumerate(selected):
             if not sides:
                 correction = 0.0
             elif len(sides) == 2:
@@ -649,7 +658,7 @@ class DFSExplorer:
                 correction = walls[sides[0]] - desired
             else:
                 correction = desired - walls[sides[0]]
-            corrections.append(correction)
+            corrections.append(correction + target_offset[axis] if sides else 0.0)
 
         shift = math.hypot(*corrections)
         result = {"walls": {name: round(walls.get(delta), 4) for name, delta in
@@ -685,6 +694,7 @@ class DFSExplorer:
             skip("skipped_map_boundary", f"alignment target for {node} is outside the SLAM map")
             return
         self._set_status("aligning")
+<<<<<<< Updated upstream
         pose = self._drive_holding_current_yaw(*target, kind="alignment")
         actual_x, actual_y = pose[:2]
         displacement = (actual_x - x, actual_y - y)
@@ -693,6 +703,97 @@ class DFSExplorer:
             wall_yaw = angle + math.atan2(delta[1], delta[0])
             along = displacement[0] * math.cos(wall_yaw) + displacement[1] * math.sin(wall_yaw)
             estimated_after[CellWallGrid.DELTA_TO_SIDE[delta]] = round(distance - along, 4)
+=======
+        verified = {}
+        steps = 0
+        moved_on_previous_axis = False
+        for axis, sides in enumerate(selected):
+            if not sides:
+                continue
+            current = {delta: initial_readings[delta] for delta in sides}
+            if moved_on_previous_axis:
+                current = {}
+                for delta in sides:
+                    reading, yaw = self._scan_for_direction(delta)
+                    if reading > self.settings["wall_threshold_mm"]:
+                        skip("skipped_wall_missing", f"selected wall at {node} is no longer detected",
+                             (x, y), steps, verified)
+                        return
+                    distance = reading / 1000.0 + self._sensor_offset(yaw)
+                    current[delta] = (distance, reading, yaw,
+                                      self.map.latest_scan_timestamp)
+            for delta in sides:
+                name = CellWallGrid.SIDE_NAMES[self.DIRECTIONS.index(delta)]
+                verified[name] = round(current[delta][0], 4)
+            while True:
+                worker_status = self.slam_worker.status() if self.slam_worker is not None else None
+                if worker_status is not None and worker_status.get("error"):
+                    raise MissionStop(worker_status["error"])
+                if (worker_status or {}).get("waiting_telemetry") or any(
+                        reading[3] is None or
+                        time.time() - reading[3] > self.settings["max_sample_age_s"]
+                        for reading in current.values()):
+                    current = {}
+                    for delta in sides:
+                        reading, yaw = self._scan_for_direction(delta)
+                        if reading > self.settings["wall_threshold_mm"]:
+                            skip("skipped_wall_missing", f"selected wall at {node} is no longer detected",
+                                 (x, y), steps, verified)
+                            return
+                        distance = reading / 1000.0 + self._sensor_offset(yaw)
+                        current[delta] = (distance, reading, yaw,
+                                          self.map.latest_scan_timestamp)
+                        name = CellWallGrid.SIDE_NAMES[self.DIRECTIONS.index(delta)]
+                        verified[name] = round(distance, 4)
+                if len(sides) == 2:
+                    correction = (current[sides[0]][0] - current[sides[1]][0]) / 2
+                elif sides[0][axis] > 0:
+                    correction = current[sides[0]][0] - desired
+                else:
+                    correction = desired - current[sides[0]][0]
+                correction += target_offset[axis]
+                if abs(correction) <= tolerance:
+                    break
+                # max_shift_m limits each PID move. A large correction is
+                # measured again after the first move instead of failing.
+                step = max(-max_shift, min(max_shift, correction))
+                step_x = step * (math.cos(angle) if axis == 0 else -math.sin(angle))
+                step_y = step * (math.sin(angle) if axis == 0 else math.cos(angle))
+                target = (x + step_x, y + step_y)
+                if not self.map.contains_world(*target):
+                    skip("skipped_map_boundary", f"alignment target for {node} is outside the SLAM map",
+                         (x, y), steps, verified)
+                    return
+                pose = self._drive_holding_current_yaw(*target, kind="alignment")
+                x, y = pose[:2]
+                steps += 1
+                moved_on_previous_axis = True
+                actual = {}
+                for delta in sides:
+                    reading, yaw = self._scan_for_direction(delta)
+                    if reading > self.settings["wall_threshold_mm"]:
+                        skip("skipped_wall_missing", f"selected wall at {node} is no longer detected",
+                             (x, y), steps, verified)
+                        return
+                    distance = reading / 1000.0 + self._sensor_offset(yaw)
+                    actual[delta] = (distance, reading, yaw,
+                                     self.map.latest_scan_timestamp)
+                    name = CellWallGrid.SIDE_NAMES[self.DIRECTIONS.index(delta)]
+                    verified[name] = round(distance, 4)
+                if len(sides) == 2:
+                    remaining = (actual[sides[0]][0] - actual[sides[1]][0]) / 2
+                elif sides[0][axis] > 0:
+                    remaining = actual[sides[0]][0] - desired
+                else:
+                    remaining = desired - actual[sides[0]][0]
+                remaining += target_offset[axis]
+                if (abs(remaining) > tolerance and
+                        abs(remaining) >= abs(correction) - .005):
+                    skip("stalled", f"remaining correction {remaining:.3f} m at {node}",
+                         (x, y), steps, verified)
+                    return
+                current = actual
+>>>>>>> Stashed changes
         with self.lock:
             self.cell_targets[node] = (actual_x, actual_y)
             result["status"] = "partial" if fraction < 1.0 else "moved"
@@ -963,14 +1064,17 @@ class DFSExplorer:
                 if lane_enabled:
                     self.ir_lanes.pop(edge, None)
                     self.last_ir_lane = {**self.last_ir_lane, "status": "blocked"}
-                self.wall_grid.observe(source, delta, distance, measured_mm,
-                                       self.settings["wall_threshold_mm"],
-                                       self.map.latest_scan_timestamp)
                 center_result = self._assess_stopped_center(source, start_pose)
+                wall_confirmed = center_result["center_confirmed"]
+                if wall_confirmed:
+                    self.wall_grid.observe(source, delta, distance, measured_mm,
+                                           self.settings["wall_threshold_mm"],
+                                           self.map.latest_scan_timestamp)
                 if tuple(destination) not in self.visited:
                     self.cell_targets.pop(tuple(destination), None)
                 self.last_motion_stop = {
                     "status": "blocked_before_move",
+                    "wall_confirmed": wall_confirmed,
                     "source_cell": list(source), "destination_cell": list(destination),
                     "center_cell": list(source), "actual_pose": list(start_pose),
                     "target_m": [x, y], "entered_destination": False,
@@ -1041,7 +1145,11 @@ class DFSExplorer:
             if scan_distance is None:
                 return False
             center_distance = scan_distance + self._sensor_offset(world_yaw)
-            if center_distance <= emergency_distance:
+            too_close = center_distance <= emergency_distance
+            if getattr(self.chassis, "directional_tof", None) is not None:
+                from src.directional_recovery import edge_margin
+                too_close = edge_margin(self, scan_distance, world_yaw - pose[2], pose[2]) <= 0
+            if too_close:
                 stopped.update({"range_mm": scan_distance * 1000.0,
                                 "center_distance_m": round(center_distance, 4),
                                 "timestamp": tof[1]})
@@ -1071,6 +1179,9 @@ class DFSExplorer:
                         (pose[1] - start_pose[1]) * path_y) / max(path_length, 1e-9)
             entered = progress >= path_length / 2.0
             center_cell = tuple(destination) if entered else source
+            # Emergency range stops wheels immediately; only a stationary,
+            # correctly centered remeasurement may change map topology.
+            verified_mm, verified_yaw = self._scan_for_direction(delta)
             with self.lock:
                 if lane_enabled:
                     self.ir_lanes.pop(edge, None)
@@ -1082,11 +1193,13 @@ class DFSExplorer:
                 planned = center_result["planned_center_m"]
                 center_offset_along = ((pose[0] - planned[0]) * math.cos(move_yaw) +
                                        (pose[1] - planned[1]) * math.sin(move_yaw))
-                self.wall_grid.observe(center_cell, delta,
-                                       stopped["center_distance_m"] + center_offset_along,
-                                       stopped["range_mm"],
-                                       self.settings["wall_threshold_mm"],
-                                       stopped["timestamp"])
+                wall_confirmed = (center_result["center_confirmed"] and
+                                  verified_mm <= self.settings["wall_threshold_mm"])
+                if wall_confirmed:
+                    self.wall_grid.observe(center_cell, delta,
+                                           verified_mm / 1000 + self._sensor_offset(verified_yaw) + center_offset_along,
+                                           verified_mm, self.settings["wall_threshold_mm"],
+                                           self.map.latest_scan_timestamp)
                 self.last_motion_stop = {
                     "status": ("emergency_stop_centered" if center_result["center_confirmed"]
                                else "emergency_stop_off_center"),
@@ -1094,6 +1207,8 @@ class DFSExplorer:
                     "center_cell": list(center_cell), "actual_pose": list(pose),
                     "target_m": [x, y], "entered_destination": entered,
                     "range_mm": stopped["range_mm"],
+                    "wall_confirmed": wall_confirmed,
+                    "verified_range_mm": verified_mm,
                     "center_distance_m": stopped["center_distance_m"],
                     **center_result,
                 }

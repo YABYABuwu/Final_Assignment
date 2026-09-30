@@ -62,6 +62,8 @@ PNG ของกริด DFS แยกเป็น `latest-grid.png` และ 
 
 ## ตัวอย่างการเพิ่มเซนเซอร์
 
+การเดิน Round 2 และ DFS ใช้ `grid_motion_settings()` และ `ChassisController.move_to()` ร่วมกัน: PID X/Y/yaw, การเร่งด้านข้างและการเบรกอ่านจาก `motion`; แหล่ง heading อ่านจาก `exploration.heading_source`; ความเร็วเริ่มต้นคือค่าต่ำสุดระหว่าง `motion.max_speed_m_s` กับ `exploration.max_speed_m_s` Round 2 ระบุ `--speed` เพื่อ override ได้แต่ไม่เกินเพดาน motion ทุก waypoint ใช้ yaw เริ่มต้นจาก pose สดและ `disable_timeout=True` เช่น DFS เพื่อรอถึงเป้า พร้อมหยุดรอเมื่อ telemetry ขาดและคง IR interlock/retarget เดิม ไม่ได้เพิ่ม SLAM หรือสแกน ToF แบบ DFS ให้ Round 2
+
 Round 2 ใช้ `exploration.ir_lane` ชุดเดียวกับ DFS และคำนวณแนวผ่าน `src/ir_lane.py` ร่วมกัน โดย `Round2Navigator` เชื่อม waypoint ของ planner เข้ากับ callback หลัง IR หลบของ `ChassisController` (DFS ใช้ตัวนี้โดยตรงไม่ได้เพราะมีวงจร scan/SLAM ต่างกัน) จำแนวแยกแต่ละทางเชื่อมภายในรัน Round 2 และยังรักษาระยะยืนยิงตามแนวยาวของ waypoint ปัจจุบัน แม้กลับมาช่องเดิมด้วยระยะยืนยิงที่ต่างกัน ขอบต้องเป็น open ในแผนที่และจุดเยื้องต้องอยู่ในสองช่องของทางเชื่อม การจัดตำแหน่งครั้งแรกที่ยังไม่มีทางเชื่อมใช้ move_to ปกติ ไม่โหลดแนวจาก Round 1 อัตโนมัติ
 
 สถานะ Round 2 อยู่ใน `round2_navigation` ของ dashboard และ run summary พร้อม IR settings/recoveries หน้า review แสดงแนวและการยกเลิกการจำเมื่อเดินไม่สำเร็จ โดยไม่ต้องมี SLAM ทำงานใน Round 2 การตรวจ IR และขอบเขตการหลบเดิมยังทำงาน แต่ไม่ได้เพิ่มวงจรสแกน ToF แบบ DFS ให้ Round 2
@@ -80,6 +82,12 @@ IR กันชนหน้า/หลังใช้ `adapter` stream เดี�
 
 ## เกณฑ์ก่อนจบงาน
 
+การตรวจเป้าใช้ `exploration.target_inspection.wait_timeout_s` (5 วินาที) จำกัดการรอ safety telemetry และการรอ gimbal action/มุมแต่ละขั้นตอน ด้วย monotonic clock ข้อมูลมุมต้องสดและใหม่กว่าคำสั่ง; timestamp เก่า อนาคต หรือไม่ finite ไม่ใช้ตัดสินใจ เมื่อหมดเวลาให้หยุดล้อและจบภารกิจด้วย MissionStop พร้อมสาเหตุ ไม่ยิง ไม่สั่ง recenter ทับ action และไม่เดินต่อด้วยข้อมูลเก่า ผู้ใช้อนุญาต timeout นี้เฉพาะเส้นทางตรวจเป้า
+
+Round 2 ใช้ `Round2Aligner` ใน `src/round2_alignment.py` เพื่อเรียกขั้นตอนปรับมุมและจัดกลางช่องเดียวกับ DFS ตอนเริ่มและก่อนตรวจ/ยิงแต่ละจุด ใช้ `exploration.heading_alignment` และ `exploration.alignment` เดิม เลือกเฉพาะด้าน `wall` จากแผนที่ที่โหลด แล้ววัด ToF สดในทิศเหล่านั้น; ไม่ค้นหากำแพงจากด้าน open/unknown และไม่ใช้ระยะเก่าเพื่อสั่งรถ ใช้ SensorLogger และ ChassisController ร่วม โดยไม่เริ่ม SLAM หรือ subscription ใหม่ ข้อมูลหายให้หยุดรอ และรอ SDK ปลด action พร้อม telemetry จริงก่อนขยับต่อ
+
+จุดเริ่มที่จัดแล้วใช้ตั้ง translation ของรอบนี้ จุดยิงรักษา offset จาก waypoint ของ planner และข้ามการจัดกลางช่องเมื่อมีแนว IR ที่ยืนยันแล้ว เพื่อไม่ดึงรถกลับเข้าแนวติดกำแพง หากไม่มีด้าน wall ให้ข้าม alignment; หากกำแพงที่เลือกวัดไม่พบให้ข้ามการจัดตำแหน่งด้านนั้น สถานะ มุม ตำแหน่ง และประวัติแต่ละจุดอยู่ใน `round2_alignment` บน dashboard และ run summary/review การทดสอบจำลองอยู่ใน `tests/test_round2_alignment.py`; ต้องตรวจมุมและระยะจริงกับหุ่นก่อนใช้งานภารกิจ
+
 - ฟีเจอร์ใช้แหล่งข้อมูล/คำสั่งร่วมเดิมเท่าที่เหมาะสม และอธิบายเหตุผลเมื่อแยกส่วนใหม่
 - วงจรเริ่ม/หยุดและการหยุดรถเมื่อผิดพลาดครบถ้วน ไม่มี subscription หรือ controller ซ้ำโดยไม่จำเป็น
 - config และเอกสารระบุหน่วย พิกัด ความถี่ อายุข้อมูล ค่าเริ่มต้น และพฤติกรรมเมื่อข้อมูลหาย
@@ -89,3 +97,16 @@ IR กันชนหน้า/หลังใช้ `adapter` stream เดี�
 ## กริดกำแพงสี่ด้าน
 
 ใช้ `CellWallGrid` ใน `src/slam.py` ร่วมกับ snapshot ของ `DFSExplorer` ผลวัดขอบติดช่องโดยตรงมีสิทธิ์เหนือผลอนุมานจากลำแสงไกล ห้ามสร้าง subscription ใหม่หรือกริดที่แยกจาก export ของแผนที่ อ่าน [WALL_GRID.md](WALL_GRID.md) ก่อนเปลี่ยนการจัดกำแพงลงขอบช่อง ต้องทดสอบว่าขอบร่วมตรงกันและข้อมูล unknown ไม่อนุญาตให้เดิน
+
+Inspection timeout diagnostics include command (moveto/recenter), phase (inspection/restore), pitch frame, requested angles and timestamp, action state/release, and latest raw angles with sample age/freshness and whether the sample follows the command. Raw stale readings are diagnostic only. The reason is included in MissionStop and existing dashboard/review error displays; final inspection progress also retains command_detail.
+
+
+## Directional IR recovery (both rounds)
+
+`recovery_mode: directional` aggregates all four IR sensors. Any left-only contact slides right; any right-only contact slides left. Rear pair alone moves forward; front pair alone moves backward. Crossed contacts, three/four contacts, or an occupied escape end stop the mission. SDK +Y is right. Legacy modes remain for regression and explicitly selected configurations.
+
+`src/directional_recovery.py` reuses the existing DFS/round-2 gimbal scan and shared SensorLogger. Each 2 cm step checks fresh ToF in its travel direction, retaining that head direction between steps. After four steps further steps require the same clearance check and actual position progress. The episode shares an eight-step / 16 cm measured-travel limit across both ends; no progress across eight fresh position samples stops recovery. Limits include changes of direction. Missing telemetry stops wheels and waits, never counts as clear. Both IR ends must provide new clear samples before success. Existing navigation callbacks retarget and retain successful lateral offsets (now capped at 16 cm).
+
+Measured edge distance is ToF +6 cm left, +5 cm right, and unchanged front/back. The existing `exploration.emergency_stop_distance_m` is converted from center distance to edge clearance using the forward sensor offset; recovery requires a further remaining-step margin. This is separate from the alignment wall-distance target. Actual overshoot depends on position sample rate and robot braking; no physical guarantee of exactly 2 cm is implied. Test and calibrate on the robot.
+
+Emergency ToF stops no longer immediately write a grid wall. A stationary fresh scan and confirmed cell-center position are required; off-center stops preserve topology and try other DFS directions. Dashboard/review show `wall_confirmed: false`; recovery events retain direction, measured distance, step count, and whether the four-step checkpoint was passed. Round 2 uses the same guard via Round2Aligner; no extra subscriptions are started.

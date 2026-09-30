@@ -5,6 +5,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from src.dashboard import Dashboard
+from src.chassis import grid_motion_settings
+from src.config_loader import load_config
 from src.logger import SensorLogger
 from src.mission_stop import MissionStop
 from src.planner import GridMap
@@ -21,11 +23,13 @@ class FakeChassis:
         self.failure = None
         self.partial = False
         self.stops = 0
+        self.motion_options = []
 
     def stop(self):
         self.stops += 1
 
-    def move_to(self, x, y, yaw=None, on_ir_recovered=None):
+    def move_to(self, x, y, yaw=None, on_ir_recovered=None, disable_timeout=False):
+        self.motion_options.append((yaw, disable_timeout))
         for before, after in self.recoveries:
             if on_ir_recovered:
                 replacement = on_ir_recovered(before, after, (x, y))
@@ -38,6 +42,31 @@ class FakeChassis:
 
 
 class Round2NavigationTests(unittest.TestCase):
+    def test_round2_uses_grid_pid_settings_and_configured_heading_source(self):
+        config = load_config()
+        config["exploration"]["heading_source"] = "gimbal"
+        config["exploration"]["max_speed_m_s"] = .17
+        settings = grid_motion_settings(config)
+        self.assertEqual(settings["pid"], config["motion"]["pid"])
+        self.assertEqual(settings["heading_source"], "gimbal")
+        self.assertEqual(settings["max_speed_m_s"], .17)
+        self.assertEqual(settings["braking_decel_m_s2"], config["motion"]["braking_decel_m_s2"])
+        self.assertEqual(grid_motion_settings(config, .12)["max_speed_m_s"], .12)
+        self.assertEqual(grid_motion_settings(config, 10)["max_speed_m_s"],
+                         config["motion"]["max_speed_m_s"])
+        for invalid in (0, -1, float("nan"), float("inf")):
+            with self.assertRaises(ValueError):
+                grid_motion_settings(config, invalid)
+
+    def test_initial_heading_is_held_for_first_move_recovery_and_return(self):
+        self.nav.heading_deg = 37
+        self.nav.move_to(None, (0, 0), (0, 0))
+        self.teach()
+        self.nav.move_to((1, 0), (0, 0), (0, 0))
+        self.assertEqual(self.chassis.motion_options, [(37, True)] * 3)
+        self.assertEqual(self.chassis.commands[-1], (0, .03))
+        self.assertEqual(self.nav.snapshot()["travel_heading_deg"], 37)
+
     def setUp(self):
         self.grid = GridMap()
         self.grid.cells = {(0, 0): {"x+": "open"},

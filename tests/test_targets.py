@@ -72,7 +72,7 @@ class FakeGimbal:
             self.logger.chassis_pitch = pitch
         self.logger.timestamp = time.time() + .01
 
-        def release():
+        def release(timeout=None):
             self.active = False
             return True
 
@@ -293,7 +293,7 @@ class TargetTests(unittest.TestCase):
                 checks.append(1)
                 return len(checks) >= 3
 
-            def wait_for_completed(self):
+            def wait_for_completed(self, timeout=None):
                 gimbal.active = False
                 return True
 
@@ -359,7 +359,7 @@ class TargetTests(unittest.TestCase):
             inspector.logger.chassis_pitch = 0
             inspector.logger.yaw = 0
             inspector.logger.timestamp = time.time() + .01
-            return SimpleNamespace(has_succeeded=True, wait_for_completed=lambda: True)
+            return SimpleNamespace(has_succeeded=True, wait_for_completed=lambda timeout=None: True)
 
         inspector.scan_gimbal = SimpleNamespace(recenter=scan_recenter)
         result = inspector.inspect((0, 0), (0, -1), -90, 0)

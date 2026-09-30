@@ -359,10 +359,21 @@
       document.getElementById("seek").max = Math.max(.01, run.duration_s);
       const wallPanel=document.getElementById("wall-grid-review"); wallPanel.replaceChildren();
       const round2=run.summary.round2_navigation;
+      const alignment2=run.summary.round2_alignment;
+      if (alignment2) {
+        const note=document.createElement("p");
+        note.textContent="Round 2 จัดแนวจากกำแพงในแผนที่: "+alignment2.events.map(event=>
+          `${event.phase === "startup" ? "เริ่มต้น" : "ก่อนยิง"} ช่อง ${event.cell.join(",")}: ${event.status}`+
+          ` · กำแพง ${event.mapped_sides.join(", ") || "ไม่มี"} · มุม ${event.heading?.status || "—"} · ตำแหน่ง ${event.position?.status || "—"}`+
+          (event.error ? ` · ${event.error}` : "")).join(" / ");
+        wallPanel.append(note);
+      }
       if (round2) {
         const note=document.createElement("p");
         const labels={original:"แนวเดิม",candidate:"ทดลองแนวใหม่",reused:"ใช้แนวที่จำไว้",confirmed:"ผ่านแล้วและจำไว้",aborted:"ยกเลิกการจำ"};
-        note.textContent="Round 2 แนว IR ที่ผ่านสำเร็จ: "+
+        note.textContent="Round 2 "+
+          (round2.travel_heading_deg != null ? `PID คงมุม ${round2.travel_heading_deg.toFixed(1)}° · ` : "")+
+          "แนว IR ที่ผ่านสำเร็จ: "+
           (round2.ir_lanes.map(lane=>`${lane.cells.map(cell=>cell.join(",")).join(" ↔ ")}: X ${(lane.offset_m[0]*100).toFixed(1)} / Y ${(lane.offset_m[1]*100).toFixed(1)} ซม.`).join(" · ") || "ยังไม่มี")+
           (round2.last_ir_lane ? ` · ล่าสุด: ${labels[round2.last_ir_lane.status] || round2.last_ir_lane.status}` : "");
         wallPanel.append(note);
@@ -483,11 +494,17 @@
             `ตำแหน่งจริง X ${motionStop.actual_pose?.[0]?.toFixed(3) ?? "—"} ม. / Y ${motionStop.actual_pose?.[1]?.toFixed(3) ?? "—"} ม.`+
             (motionStop.planned_center_error_m != null
               ? `, ห่างเป้ากลางช่อง ${(motionStop.planned_center_error_m*100).toFixed(1)} ซม.` : "")+
+            (motionStop.wall_confirmed === false ? ", ไม่เพิ่มกำแพง: ตำแหน่งหรือผลวัดยังไม่ยืนยัน" : "")+
             (motionStop.status === "emergency_stop_off_center" ? ", ตรวจทางใหม่ก่อนเดินต่อ" : "");
           wallPanel.append(note);
         }
         const inspections=run.summary.exploration?.wall_inspections || [];
         const targetProgress=run.summary.exploration?.target_progress;
+        if (targetProgress?.error) {
+          const error=document.createElement("p");
+          error.textContent=targetProgress.error;
+          wallPanel.append(error);
+        }
         if (inspections.length) {
           const title=document.createElement("p");
           const shots=inspections.flatMap(item=>item.targets || []).filter(item=>item.status === "fire_command_accepted").reduce((count,item)=>count+(item.shots_requested || 1),0);
@@ -497,7 +514,7 @@
           for (const item of inspections) {
             const row=document.createElement("li");
             row.textContent=`ช่อง ${item.cell?.join(",")} ทิศ ${item.direction?.join(",")} · ${item.status}`+
-              (item.targets?.length ? ` · ${item.targets.map(target=>`${target.color || "—"}/${target.shape || "—"}: ${target.status}${target.shots_requested ? ` · สั่งยิง ${target.shots_requested} นัด${target.aim_mode === "closest_reachable" ? " (จุดใกล้กลางที่สุด)" : ""}` : ""}${target.area_fraction != null ? ` (${(target.area_fraction*100).toFixed(1)}% ของภาพ)` : ""}`).join(", ")}` : "")+
+              (item.targets?.length ? ` · ${item.targets.map(target=>`${target.color || "—"}/${target.shape || "—"}: ${target.status}${target.shots_requested ? ` · สั่งยิง ${target.shots_requested} นัด${target.aim_mode === "closest_reachable" ? " (จุดใกล้กลางที่สุด)" : target.lock_before_aim ? " (ล็อกก่อนเล็ง)" : ""}` : ""}${target.area_fraction != null ? ` (${(target.area_fraction*100).toFixed(1)}% ของภาพ)` : ""}`).join(", ")}` : "")+
               (item.status === "checking" && targetProgress?.interrupted_from && item.cell?.join(",") === targetProgress.cell?.join(",") && item.direction?.join(",") === targetProgress.direction?.join(",")
                 ? ` · หยุดขณะ ${targetProgress.interrupted_from}${targetProgress.action_state ? ` (${targetProgress.action_state})` : ""}` : "")+
               (item.reason ? ` · ${item.reason}` : "");

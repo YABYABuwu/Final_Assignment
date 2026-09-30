@@ -83,6 +83,7 @@
         <div class="card-head"><h2>IR กันชนหน้า</h2><span class="muted">IO · ซ้าย ID 4/2 · ขวา ID 1/1</span></div>
         <div class="map-info"><div>หน้าขวา&nbsp; <strong id="front-ir-right">—</strong></div><div>หน้าซ้าย&nbsp; <strong id="front-ir-left">—</strong></div><div id="front-ir-state">รอข้อมูล IR</div></div>
         <p id="round2-ir-lane" class="muted" hidden></p>
+        <p id="round2-alignment" class="muted" hidden></p>
       </section>
       <section class="card">
         <div class="card-head"><h2>แผนที่ SLAM / DFS</h2><div class="map-actions"><button id="export-json" type="button">ส่งออก JSON</button><button id="export-png" type="button">ส่งออก PNG</button><button id="export-grid-png" type="button">ส่งออก Grid PNG</button><button id="export-ros" type="button">ส่งออก ROS</button><button id="load-map" type="button">เปิด JSON</button><input id="map-file" type="file" accept="application/json,.json" hidden></div></div>
@@ -359,22 +360,35 @@
           ` · ระยะผนัง ${(motionStop.center_distance_m*100).toFixed(1)} ซม.`+
           (motionStop.planned_center_error_m != null
             ? ` · ห่างเป้ากลางช่อง ${(motionStop.planned_center_error_m*100).toFixed(1)} ซม.` : "")+
+          (motionStop.wall_confirmed === false ? " · ยังไม่ยืนยันกำแพง: ไม่เพิ่มขอบกำแพงจากการหยุดนี้" : "")+
           (motionStop.status === "emergency_stop_off_center" ? " · ตรวจทางใหม่ก่อนเดินต่อ" : "");
       }
       const inspections=map.exploration?.wall_inspections || [];
       const accepted=inspections.flatMap(item=>item.targets || []).filter(item=>item.status === "fire_command_accepted").reduce((count,item)=>count+(item.shots_requested || 1),0);
       const latestInspection=inspections.at(-1);
       const progress=map.exploration?.target_progress;
-      const progressNames={pointing:"หันกล้อง",searching:"หาตัวเป้า",aiming:"เล็ง",restoring_scan_angle:"คืนมุมสแกน",waiting_target_safety:"รอข้อมูลความปลอดภัย",waiting_target_action:"รอ SDK ปลดคำสั่งกิมบอล",waiting_target_angle:"รอมุมกิมบอล",waiting_camera_frame:"รอภาพกล้องใหม่",stopped:"หยุดระหว่างตรวจเป้า"};
+      const progressNames = {
+        pointing: "หันกล้อง",
+        searching: "หาตัวเป้า",
+        aiming: "เล็ง",
+        target_locked: "ล็อกเป้าแล้ว ปรับมุมยิง IR",
+        restoring_scan_angle: "คืนมุมสแกน",
+        waiting_target_safety: "รอข้อมูลความปลอดภัย",
+        waiting_target_action: "รอ SDK ปลดคำสั่งกิมบอล",
+        waiting_target_angle: "รอมุมกิมบอล",
+        waiting_camera_frame: "รอภาพกล้องใหม่",
+        stopped: "หยุดระหว่างตรวจเป้า",
+      };
       document.getElementById("target-inspections").textContent = map.exploration?.target_inspection_enabled
         ? `ตรวจเป้าที่กำแพง ${inspections.length} ขอบ · SDK รับคำสั่งยิง infrared ${accepted} ครั้ง`+
           (progressNames[progress?.status]
             ? ` · ${progressNames[progress.status]} ช่อง ${progress.cell?.join(",")} ทิศ ${progress.direction?.join(",")} ${progress.target ? `(${progress.target.color}/${progress.target.shape})` : ""}`+
               (progress.target_pitch_deg != null ? ` · pitch ${progress.pitch_frame === "chassis" ? "ตัวรถ" : "พื้น"} ${progress.actual_pitch_deg ?? "—"}°/${progress.target_pitch_deg}°` : "")+
               (progress.interrupted_from ? ` · ค้างที่ ${progressNames[progress.interrupted_from] || progress.interrupted_from}` : "")+
+              (progress.error ? ` · ${progress.error}` : "")+
               (progress.action_state ? ` · action ${progress.action_state}` : "") : "")+
           (latestInspection ? ` · ล่าสุดช่อง ${latestInspection.cell?.join(",")} ทิศ ${latestInspection.direction?.join(",")} ${latestInspection.status}`+
-            (latestInspection.targets?.length ? ` · ${latestInspection.targets.map(item=>`${item.color || "—"}/${item.shape || "—"}: ${item.status}${item.shots_requested ? ` ${item.shots_requested} นัด${item.aim_mode === "closest_reachable" ? " (จุดใกล้กลางที่สุด)" : ""}` : ""}`).join(", ")}` : "") : "")
+            (latestInspection.targets?.length ? ` · ${latestInspection.targets.map(item=>`${item.color || "—"}/${item.shape || "—"}: ${item.status}${item.shots_requested ? ` ${item.shots_requested} นัด${item.aim_mode === "closest_reachable" ? " (จุดใกล้กลางที่สุด)" : item.lock_before_aim ? " (ล็อกก่อนเล็ง)" : ""}` : ""}`).join(", ")}` : "") : "")
         : "ตรวจเป้าที่กำแพง: ปิด";
       const route = map.trajectory || [];
       for (const lane of map.exploration?.ir_lanes || []) {
@@ -596,6 +610,15 @@
         }
         document.getElementById("mission").textContent = status.mission_status;
         const round2=status.round2_navigation;
+        const alignment2=status.round2_alignment;
+        const alignment2Label=document.getElementById("round2-alignment");
+        alignment2Label.hidden = !alignment2;
+        if (alignment2) {
+          const phases={startup:"เริ่มต้น",before_shooting:"ก่อนยิง"};
+          alignment2Label.textContent=`Round 2 จัดแนว${phases[alignment2.phase] || ""} · ช่อง ${alignment2.cell.join(",")} · ใช้กำแพงจากแผนที่ ${alignment2.mapped_sides.join(", ") || "ไม่มี"}`+
+            ` · ${alignment2.status} · มุม: ${alignment2.heading?.status || "—"} · ตำแหน่ง: ${alignment2.position?.status || "—"}`+
+            (alignment2.error ? ` · ${alignment2.error}` : "");
+        }
         const round2Label=document.getElementById("round2-ir-lane");
         round2Label.hidden = !round2;
         if (round2) {
@@ -603,6 +626,7 @@
           const labels={original:"แนวเดิม",candidate:"ทดลองแนวใหม่",reused:"ใช้แนวที่จำไว้",confirmed:"ผ่านแล้วและจำไว้",aborted:"ยกเลิกการจำ"};
           round2Label.textContent=!round2.enabled ? "Round 2: ปิดการจำแนว IR" :
             `Round 2: จำแนว IR ${round2.ir_lanes.length} ช่วง`+
+            (round2.travel_heading_deg != null ? ` · PID คงมุม ${round2.travel_heading_deg.toFixed(1)}°` : "")+
             (lane ? ` · ${lane.cells.map(cell=>cell.join(",")).join(" ↔ ")}: ${labels[lane.status] || lane.status}`+
               ` · เยื้อง X ${(lane.offset_m[0]*100).toFixed(1)} / Y ${(lane.offset_m[1]*100).toFixed(1)} ซม.` : "");
         }
@@ -638,7 +662,18 @@
         const tofChannel = Number(slamMap?.sensor_model?.tof_channel ?? 0);
         const tofValue = status.streams.tof?.[tofChannel];
         document.getElementById("tof").textContent = tofValue > 0 ? `${number(tofValue, 0)} mm` : "— mm";
-        const cameraState = status.camera_error || (status.camera_ready ? "ภาพกำลังอัปเดต" : "รอภาพจากกล้อง…");
+        const cameraState =
+          status.camera_error ||
+          (
+            status.camera_ready
+              ? "ภาพกำลังอัปเดต"
+              : "รอเฟรมใหม่ · ข้ามเฟรมเสีย/ค้าง"
+          ) +
+          (
+            status.camera_health?.skipped_reads
+              ? ` · ข้ามการอ่าน ${status.camera_health.skipped_reads} ครั้ง · กลับมารับภาพ ${status.camera_health.recovered_gaps} ครั้ง`
+              : ""
+          );
         const detector = status.target_detection;
         const colorLabels = {red: "แดง", green: "เขียว", yellow: "เหลือง", blue: "น้ำเงิน"};
         const shapeLabels = {circle: "วงกลม", square: "สี่เหลี่ยมจัตุรัส", horizontal: "สี่เหลี่ยมแนวนอน", vertical: "สี่เหลี่ยมแนวตั้ง"};

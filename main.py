@@ -3,7 +3,7 @@
 from pathlib import Path
 import time
 
-from src.chassis import ChassisController
+from src.chassis import ChassisController, grid_motion_settings
 from src.config_loader import load_config
 from src.dashboard import Dashboard
 from src.explorer import DFSExplorer
@@ -61,10 +61,7 @@ def main():
         logger.start()
         motion_settings = config["motion"].copy()
         if exploration_settings["enabled"]:
-            motion_settings["max_speed_m_s"] = min(
-                motion_settings["max_speed_m_s"], exploration_settings["max_speed_m_s"]
-            )
-            motion_settings["heading_source"] = exploration_settings["heading_source"]
+            motion_settings = grid_motion_settings(config)
         logger.motion_settings = {"max_speed_m_s": motion_settings["max_speed_m_s"],
                                   "braking_decel_m_s2": motion_settings["braking_decel_m_s2"],
                                   "max_lateral_accel_m_s2": motion_settings["max_lateral_accel_m_s2"]}
@@ -84,6 +81,9 @@ def main():
             slam_worker = SlamWorker(logger, slam_map, exploration_settings)
             explorer = DFSExplorer(chassis, ChassisRelativeGimbal(ep_robot.gimbal), logger, slam_map,
                                     exploration_settings)
+            if config["front_ir"].get("recovery_mode") == "directional":
+                from src.directional_recovery import DirectionalToF
+                chassis.directional_tof = DirectionalToF(explorer)
             slam_worker.start()
         print("Connected. Logs:", logger.run_dir or "disabled")
         if config["dashboard"]["enabled"]:
