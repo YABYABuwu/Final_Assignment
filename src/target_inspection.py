@@ -1,4 +1,4 @@
-"""Stationary wall inspection and bounded infrared shots per confirmed target."""
+"""Stationary wall inspection and bounded gel/infrared shots per confirmed target."""
 
 import math
 import time
@@ -57,6 +57,7 @@ class WallTargetInspector:
         self.slam_worker = slam_worker
         self.settings = settings
         self.fire_type = fire_type
+        self.active_target_settings = None
         self.on_progress = on_progress
         self.color_ranges = color_ranges
 
@@ -71,6 +72,11 @@ class WallTargetInspector:
         self.camera_generation = None
         self.camera_frame_metadata = None
         self.restarting_inspection = False
+
+    def _target_config(self):
+        if self.active_target_settings is not None:
+            return self.active_target_settings
+        return self.settings.get("target_inspection", {})
 
     def _deadline(self, gimbal=False):
         config = self.settings.get("target_inspection", {})
@@ -421,11 +427,11 @@ class WallTargetInspector:
         )
 
     def _fire(self, item, frame, aim_mode):
-        config = self.settings.get("target_inspection", {})
+        config = self._target_config()
         shots = config.get("shots_per_target", 2)
         has_metadata = getattr(self.camera_frames, "supports_frame_metadata", False) is True
         if has_metadata and self.camera_frame_metadata is None:
-            raise MissionStop("infrared fire requires a confirmed camera lock")
+            raise MissionStop("target fire requires a confirmed camera lock")
         generation = self.camera_frame_metadata["generation"] if has_metadata else None
         while True:
             if has_metadata:
@@ -446,7 +452,7 @@ class WallTargetInspector:
             expected_pitch, expected_yaw = self.commanded_angles
             if (abs(pitch - expected_pitch) > self.settings["gimbal"]["pitch_tolerance_deg"] or
                     abs(_wrap_degrees(yaw - expected_yaw)) > self.settings["gimbal"]["angle_tolerance_deg"]):
-                raise MissionStop("target gimbal drifted before infrared fire")
+                raise MissionStop("target gimbal drifted before target fire")
             self._health()
             if not has_metadata or self.camera_frames.is_camera_current(generation):
                 break
@@ -454,19 +460,22 @@ class WallTargetInspector:
             # stream and recheck angles without moving back to the scan pose.
 
         try:
+            # SDK WATER_FIRE sends gel pellets; INFRARED_FIRE sends IR.
+            mode = config.get("fire_mode", "infrared")
+            fire_type = "water" if mode == "gel" else self.fire_type
             accepted = self.blaster.fire(
-                fire_type=self.fire_type,
+                fire_type=fire_type,
                 times=shots,
             )
         except Exception as error:
             raise MissionStop(
-                "infrared fire command failed; "
+                "target fire command failed; "
                 f"firing state unknown: {error}"
             ) from error
 
         if not accepted:
             raise MissionStop(
-                "infrared fire command was not accepted; "
+                "target fire command was not accepted; "
                 "firing state unknown"
             )
 
@@ -486,6 +495,8 @@ class WallTargetInspector:
             ),
             "center": list(item.center),
             "shots_requested": shots,
+            "fire_mode": mode,
+            "target_policy_revision": config.get("revision", 0),
             "aim_mode": aim_mode,
         }
 
@@ -554,7 +565,7 @@ class WallTargetInspector:
         return self._fire(confirmed_item, frame, mode)
 
     def _aim(self, track_id, tracker, first_frame, first_item):
-        config = self.settings["target_inspection"]
+        config = self._target_config()
         aim_speed = config.get("aim_yaw_speed_deg_s", 30)
         if config.get("blind_aim", False):
             height, width = first_frame.shape[:2]
@@ -581,7 +592,7 @@ class WallTargetInspector:
 
     def _fire_locked_target(self, item, frame):
         """Project a stationary confirmed target into an IR aim angle."""
-        config = self.settings["target_inspection"]
+        config = self._target_config()
         height, width = frame.shape[:2]
 
         # Use the last confirmed position before moving the gimbal.
@@ -665,7 +676,7 @@ class WallTargetInspector:
                 }
 
         # Fresh safety telemetry, gimbal angles and camera health
-        # are still checked before sending the infrared command.
+        # are still checked before sending the fire command.
         result = self._fire(item, frame, mode)
 
         result.update({
@@ -679,6 +690,10 @@ class WallTargetInspector:
 
     def inspect(self, cell, delta, world_yaw, body_yaw, range_mm=None, initial_pitch=None):
         """Keep this wall pending across decoder restarts without repeating shots."""
+        self.active_target_settings = dict(self.settings["target_inspection"])
+        policy_snapshot = getattr(self.camera_frames, "target_policy_snapshot", None)
+        if callable(policy_snapshot):
+            self.active_target_settings.update(policy_snapshot())
         completed, attempted = [], []
         while True:
             self.camera_generation = None
@@ -706,7 +721,7 @@ class WallTargetInspector:
         self.active_cell = cell
         self.active_delta = delta
 
-        config = self.settings["target_inspection"]
+        config = self._target_config()
 
         selected = (
             None
@@ -757,7 +772,15 @@ class WallTargetInspector:
             "status": "checking",
             "targets": completed if completed is not None else [],
             "checked_at": time.time(),
+            "target_policy": {"selected": config["selected"],
+                              "fire_mode": config.get("fire_mode", "infrared"),
+                              "revision": config.get("revision", 0)},
         }
+
+        if selected == set():
+            result["status"] = "no_target_selected"
+            self._progress(cell, delta, "no_target_selected")
+            return result
 
         self.chassis.stop()
         _, original_yaw, _ = self._angles()

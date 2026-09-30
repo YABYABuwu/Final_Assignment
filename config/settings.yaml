@@ -229,7 +229,7 @@ exploration:
     adaptive_pitch: true    # ปรับมุมก้มอัตโนมัติตามระยะ ToF ถ้าอยู่ใกล้กำแพงเกินไป
     close_range_threshold_mm: 180 # ระยะที่ถือว่าอยู่ใกล้กำแพงมาก (18 ซม.)
     close_pitch_deg: -20.0  # มุมก้มเมื่ออยู่ใกล้กำแพงมาก
-    fire_mode: infrared
+    fire_mode: gel
   map:
     resolution_m: 0.05
     width_m: 12.0        # ความกว้างสนามตามแกน SDK +X; ลดตามขนาดสนามจริงเพื่อลดจำนวนช่องแผนที่

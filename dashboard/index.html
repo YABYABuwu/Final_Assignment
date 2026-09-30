@@ -5,26 +5,26 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>RoboMaster Dashboard</title>
   <style>
-    :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #0a121c; color: #eef5f7; }
+    :root { color-scheme: light; font-family: system-ui, sans-serif; background: #f3f6fa; color: #172b42; }
     * { box-sizing: border-box; }
     body { margin: 0; padding: 22px; }
     header { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin: 0 0 18px; }
     h1, h2, p { margin: 0; }
     h1 { font-size: clamp(1.25rem, 2vw, 1.8rem); letter-spacing: .02em; }
     h2 { font-size: 1rem; font-weight: 650; }
-    .muted { color: #91a5b6; font-size: .83rem; }
+    .muted { color: #63758a; font-size: .83rem; }
     .brand { display: flex; align-items: center; gap: 12px; }
-    .brand-mark { width: 12px; height: 32px; border-radius: 4px; background: #6de4c4; box-shadow: 0 0 18px #36dbb79c; }
-    .live { border: 1px solid #315f55; background: #14392f; color: #94f4d4; border-radius: 999px; padding: 8px 12px; white-space: nowrap; font-size: .82rem; }
+    .brand-mark { width: 12px; height: 32px; border-radius: 4px; background: #258d75; box-shadow: 0 0 18px #36dbb79c; }
+    .live { border: 1px solid #b8dece; background: #e7f6ee; color: #20724e; border-radius: 999px; padding: 8px 12px; white-space: nowrap; font-size: .82rem; }
     .layout { display: grid; grid-template-columns: minmax(0, 1.12fr) minmax(390px, .88fr); gap: 16px; align-items: start; max-width: 1800px; margin: auto; }
     .left { display: grid; gap: 16px; min-width: 0; }
-    .card { background: #12202c; border: 1px solid #284052; border-radius: 16px; box-shadow: 0 10px 28px #0002; overflow: hidden; }
-    .card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 17px; border-bottom: 1px solid #263a49; }
+    .card { background: #ffffff; border: 1px solid #dbe4ed; border-radius: 16px; box-shadow: 0 10px 28px #0002; overflow: hidden; }
+    .card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 17px; border-bottom: 1px solid #e3eaf1; }
     .card-head .muted { text-align: right; }
     .camera-wrap { position: relative; background: #070d12; aspect-ratio: 16 / 9; min-height: 240px; }
     .camera-wrap img { display: block; width: 100%; height: 100%; object-fit: contain; }
     .camera-wrap .top-strip { position: absolute; top: 14px; left: 14px; right: 14px; display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; pointer-events: none; }
-    .tag { background: #08141dcc; border: 1px solid #77ecd469; border-radius: 9px; padding: 7px 10px; backdrop-filter: blur(5px); }
+    .tag { background: #08141dcc; color: #eef5f7; border: 1px solid #77ecd469; border-radius: 9px; padding: 7px 10px; backdrop-filter: blur(5px); }
     .tag strong { color: #98f5dc; font-variant-numeric: tabular-nums; }
     .crosshair { position: absolute; top: 50%; left: 50%; width: 62px; height: 62px; transform: translate(-50%, -50%); pointer-events: none; filter: drop-shadow(0 0 3px #051817); }
     .crosshair::before, .crosshair::after { content: ""; position: absolute; background: #8ef4d3; }
@@ -32,28 +32,55 @@
     .crosshair::after { height: 1px; width: 62px; top: 30px; }
     .crosshair span { position: absolute; left: 25px; top: 25px; width: 11px; height: 11px; border: 1px solid #8ef4d3; border-radius: 50%; background: #061a1a88; }
     .camera-note { padding: 10px 16px; min-height: 38px; }
-    .camera-targets { padding: 0 16px 12px; color: #b9d9e2; font-size: .82rem; line-height: 1.5; }
+    .camera-targets { padding: 0 16px 12px; color: #456078; font-size: .82rem; line-height: 1.5; }
     .map-wrap { display: grid; gap: 10px; padding: 14px; }
-    #map { display: block; width: 100%; height: 330px; border-radius: 9px; background: #0a1721; }
-    .map-info { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr)); gap: 7px 14px; font-size: .8rem; color: #d4e4ec; background: #0a1721; border: 1px solid #315060; border-radius: 9px; padding: 9px 11px; }
-    .map-info strong { color: #8af0cf; font-size: 1rem; }
+    #map { display: block; width: 100%; height: 330px; border-radius: 9px; background: #f5f8fc; }
+    .map-info { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr)); gap: 7px 14px; font-size: .8rem; color: #456078; background: #f5f8fc; border: 1px solid #d6e1eb; border-radius: 9px; padding: 9px 11px; }
+    .map-info strong { color: #197357; font-size: 1rem; }
     #cell-sides { grid-column: 1 / -1; line-height: 1.6; }
     .map-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
-    .map-actions button { background: #172b3a; color: #e8f2f5; border: 1px solid #365469; border-radius: 7px; padding: 5px 8px; font: inherit; font-size: .72rem; cursor: pointer; }
-    .map-actions button:hover { border-color: #78c9e5; }
-    .map-legend { display: flex; flex-wrap: wrap; gap: 7px 12px; font-size: .72rem; color: #d4e4ec; }
+    .map-actions button { background: #ffffff; color: #25445e; border: 1px solid #ccd9e5; border-radius: 7px; padding: 5px 8px; font: inherit; font-size: .72rem; cursor: pointer; }
+    .map-actions button:hover { border-color: #468dbb; }
+    .map-legend { display: flex; flex-wrap: wrap; gap: 7px 12px; font-size: .72rem; color: #456078; }
     .key::before { content: ""; display: inline-block; width: 12px; height: 3px; margin-right: 5px; vertical-align: middle; background: var(--key); }
     .right { min-width: 0; }
     .graphs { display: grid; gap: 12px; padding: 14px; max-height: calc(100vh - 135px); overflow-y: auto; }
-    .graph { background: #0c1b27; border: 1px solid #294255; border-radius: 11px; padding: 12px; min-width: 0; }
+    .graph { background: #f8fafc; border: 1px solid #dae4ee; border-radius: 11px; padding: 12px; min-width: 0; }
     .graph-title { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
     .graph-title strong { text-transform: uppercase; letter-spacing: .07em; font-size: .82rem; }
     .graph canvas { display: block; width: 100%; height: 140px; cursor: crosshair; }
-    .series-legend { display: flex; flex-wrap: wrap; gap: 5px 12px; margin: 4px 0 9px; color: #a9bfcb; font-size: .69rem; }
+    .series-legend { display: flex; flex-wrap: wrap; gap: 5px 12px; margin: 4px 0 9px; color: #61778a; font-size: .69rem; }
     .series-legend span::before { content: ""; display: inline-block; width: 10px; height: 3px; vertical-align: middle; margin-right: 4px; background: var(--line); }
-    .graph .readout { min-height: 42px; color: #b8cfda; font-size: .76rem; line-height: 1.5; overflow-wrap: anywhere; }
-    .graph .readout b { color: #eff7f8; }
+    .graph .readout { min-height: 42px; color: #567087; font-size: .76rem; line-height: 1.5; overflow-wrap: anywhere; }
+    .graph .readout b { color: #203a51; }
     #empty { padding: 24px; text-align: center; }
+    .target-controls { padding: 16px; display: grid; gap: 14px; }
+    .target-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+    .target-controls button, .target-controls select { font: inherit; font-size: .85rem; border: 1px solid #cbd7e3; border-radius: 8px; padding: 8px 12px; background: #fff; color: #172b42; cursor: pointer; }
+    .target-controls button:hover { background: #eef5fb; }
+    .target-controls button:disabled, .target-controls select:disabled { opacity: .55; cursor: default; }
+    .target-controls button:focus-visible, .target-controls select:focus-visible, .target-choice:focus-within { outline: 3px solid #78b5f1; outline-offset: 2px; }
+    .target-table-wrap { overflow-x: auto; }
+    .target-table { width: 100%; border-collapse: collapse; min-width: 390px; text-align: center; }
+    .target-table th, .target-table td { padding: 5px; }
+    .target-table th button { width: 100%; border: 0; padding: 8px 4px; font-size: .78rem; }
+    .target-choice { display: flex; gap: 9px; align-items: center; justify-content: center; padding: 10px; border: 1px solid #dbe3ec; border-radius: 10px; background: #f7f9fc; cursor: pointer; }
+    .target-choice:has(input:checked) { background: #e7f2ff; border-color: #4085cd; }
+    .target-choice input { accent-color: #2474c2; width: 16px; height: 16px; margin: 0; }
+    .target-shape { display: inline-block; background: var(--target-color); width: 22px; height: 22px; box-shadow: inset 0 0 0 1px #0002; }
+    .target-shape.circle { border-radius: 50%; }
+    .target-shape.square { border-radius: 3px; }
+    .target-shape.horizontal { width: 29px; height: 15px; border-radius: 2px; }
+    .target-shape.vertical { width: 15px; height: 29px; border-radius: 2px; }
+    .target-controls .primary { background: #246db1; color: #fff; border-color: #246db1; margin-left: auto; }
+    .target-controls .primary:hover { background: #195992; }
+    #target-message { font-size: .83rem; line-height: 1.6; }
+    .mission-start-panel { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 16px; border-top: 1px solid #dbe4ed; background: #eef7f2; }
+    #start-mission { border: 0; border-radius: 9px; background: #20734f; color: #fff; font: inherit; font-weight: 650; padding: 12px 18px; cursor: pointer; }
+    #start-mission:hover { background: #195c3f; }
+    #start-mission:disabled { opacity: .5; cursor: default; }
+    #start-mission:focus-visible { outline: 3px solid #78b5f1; outline-offset: 2px; }
+    #mission-start-message { font-size: .83rem; line-height: 1.6; flex: 1; min-width: 180px; }
     @media (max-width: 950px) { .layout { grid-template-columns: 1fr; } .graphs { max-height: none; } }
     @media (max-width: 600px) { body { padding: 12px; } header { align-items: flex-start; } .camera-wrap { min-height: 190px; } #map { height: 270px; } }
   </style>
@@ -65,6 +92,21 @@
   </header>
   <main class="layout">
     <div class="left">
+      <section class="card">
+        <div class="card-head"><h2>เลือกเป้าหมายและชนิดกระสุน</h2><span class="muted" id="target-count">รอการตั้งค่า…</span></div>
+        <div class="target-controls">
+          <p class="muted">เลือกได้หลายคู่สีและรูปร่างพร้อมกัน · กดชื่อสีหรือรูปร่างเพื่อเลือกทั้งแถวหรือคอลัมน์</p>
+          <div class="target-toolbar"><button type="button" id="targets-all">เลือกทั้งหมด</button><button type="button" id="targets-none">ล้างทั้งหมด</button></div>
+          <div class="target-table-wrap"><table class="target-table" aria-label="เลือกคู่สีและรูปร่างของเป้าหมาย"><thead id="target-head"></thead><tbody id="target-options"></tbody></table></div>
+          <div class="target-toolbar"><label for="fire-mode">ชนิดกระสุน</label><select id="fire-mode"><option value="infrared">Infrared · อินฟราเรด</option><option value="gel">Gel · กระสุนเจล</option></select><button type="button" class="primary" id="save-targets" disabled>บันทึกการตั้งค่า</button></div>
+          <p id="target-message" role="status" aria-live="polite">กำลังโหลดการตั้งค่า…</p>
+          <p class="muted">มีผลตั้งแต่การตรวจผนังถัดไป · ใช้เฉพาะรอบที่โปรแกรมกำลังเปิดอยู่ · ไม่เลือกเป้าใด = ไม่ยิง</p>
+        </div>
+        <div class="mission-start-panel">
+          <button type="button" id="start-mission" disabled>บันทึกและเริ่มภารกิจ</button>
+          <p id="mission-start-message" role="status" aria-live="polite">กำลังโหลดสถานะภารกิจ…</p>
+        </div>
+      </section>
       <section class="card">
         <div class="card-head"><h2>ภาพจากกล้อง</h2><span class="muted">ภาพล่าสุด · crosshair กลางภาพ</span></div>
         <div class="camera-wrap">
@@ -91,7 +133,7 @@
           <label class="muted"><input id="fine-map" type="checkbox"> แสดง occupancy ละเอียด</label>
           <canvas id="map" aria-label="เส้นทาง ตำแหน่ง และทิศหุ่นยนต์"></canvas>
           <div class="muted" id="map-field">สนาม: รอข้อมูล</div>
-          <div class="map-legend"><span class="key" style="--key:#8cf1d2">ขอบทางเปิด</span><span class="key" style="--key:#ffb868">กำแพง</span><span class="key" style="--key:#718594">เส้นประ: ยังไม่รู้/อนุมาน</span><span class="key" style="--key:#69d9ff">เส้นทาง</span></div>
+          <div class="map-legend"><span class="key" style="--key:#168760">ขอบทางเปิด</span><span class="key" style="--key:#c45e24">กำแพง</span><span class="key" style="--key:#718594">เส้นประ: ยังไม่รู้/อนุมาน</span><span class="key" style="--key:#247bbb">เส้นทาง</span></div>
           <div class="map-info"><div>DFS&nbsp; <strong id="dfs-status">ปิด</strong></div><div id="map-counts">รอข้อมูลแผนที่</div><div id="pose">X — · Y — · Yaw —</div><div>ความเร็ว&nbsp; <strong id="speed">— m/s</strong></div><div>อัตราเร่งสไลด์ซ้าย/ขวาสูงสุด&nbsp; <strong id="acceleration">— m/s²</strong></div><div>ค่าชะลอเข้า waypoint&nbsp; <strong id="braking">— m/s²</strong></div><div>Gimbal&nbsp; <span id="gimbal-map">—</span></div><div id="heading-alignment">จัดมุมจากกำแพง: รอข้อมูล</div><div>DFS เลือกขอบทางเปิดจาก ToF ที่สแกนใหม่</div><div>ทิศแผนที่: ↑ +X เหนือ · ↓ −X ใต้ · → +Y ตะวันออก</div><div id="tof-model">ToF: —</div><div id="cell-sides"></div><div id="target-inspections">ตรวจเป้าที่กำแพง: รอข้อมูล</div><div id="map-message"></div></div>
         </div>
       </section>
@@ -102,7 +144,7 @@
     </section>
   </main>
   <script>
-    const colors = ["#6ed9ff", "#ffb967", "#8cf1d2", "#c5a5ff", "#f28bb5", "#f6d67d", "#8daeff", "#b6dc88"];
+    const colors = ["#2582bc", "#ca7325", "#168760", "#8a5ebf", "#c34f88", "#a78918", "#5672bf", "#688e3a"];
     const history = {};
     const columns = {};
     const chartCards = {};
@@ -110,6 +152,131 @@
     let latest = {};
     let slamMap = null;
     let busy = false;
+    const targetColors = {red: ["แดง", "#d64b50"], green: ["เขียว", "#248858"], yellow: ["เหลือง", "#e7b52c"], blue: ["น้ำเงิน", "#307ec5"]};
+    const targetShapes = {circle: "วงกลม", square: "สี่เหลี่ยมจัตุรัส", horizontal: "สี่เหลี่ยมแนวนอน", vertical: "สี่เหลี่ยมแนวตั้ง"};
+    let targetPolicy = null;
+    let targetDirty = false;
+    let targetSaving = false;
+    let missionControl = null;
+    let missionStarting = false;
+    let missionStartError = "";
+
+    function targetInputs() { return [...document.querySelectorAll("#target-options input")]; }
+    function updateTargetCount() {
+      document.getElementById("target-count").textContent = `${targetInputs().filter(input => input.checked).length} / 16 คู่`;
+      document.getElementById("save-targets").disabled = !targetPolicy?.enabled || !targetDirty || targetSaving;
+      renderMissionControl();
+    }
+    function renderMissionControl() {
+      const button = document.getElementById("start-mission");
+      button.disabled = !targetPolicy || !missionControl?.requires_start || missionControl.started || targetSaving || missionStarting;
+      button.textContent = missionControl?.started ? "เริ่มภารกิจแล้ว" : missionStarting ? "กำลังเริ่ม…" : "บันทึกและเริ่มภารกิจ";
+      document.getElementById("mission-start-message").textContent = missionStartError ||
+        (!missionControl ? "กำลังโหลดสถานะภารกิจ…" : missionControl.started ? "ภารกิจเริ่มแล้ว · ค่าที่แก้หลังจากนี้ใช้ในการตรวจผนังถัดไป" :
+          missionControl.requires_start ? "หุ่นรออยู่ · เลือกเป้าและชนิดกระสุน แล้วกดเริ่ม ระบบจะบันทึกค่าที่เลือกให้ทันที" : "โหมดดูข้อมูล · ไม่มีภารกิจให้เริ่ม");
+    }
+    function syncMissionControl(control) {
+      if (missionControl?.started && !control?.started) return;
+      missionControl = control;
+      if (control?.started) missionStartError = "";
+      renderMissionControl();
+    }
+    function editTargets() {
+      targetDirty = true;
+      document.getElementById("target-message").textContent = "มีการเปลี่ยนแปลง · กดบันทึกเพื่อใช้งาน";
+      updateTargetCount();
+    }
+    function toggleTargetGroup(predicate) {
+      const inputs = targetInputs().filter(predicate);
+      const checked = !inputs.every(input => input.checked);
+      inputs.forEach(input => { input.checked = checked; });
+      editTargets();
+    }
+    function buildTargetControls() {
+      const head = document.createElement("tr");
+      head.append(document.createElement("th"));
+      for (const [shape, label] of Object.entries(targetShapes)) {
+        const cell = document.createElement("th");
+        cell.scope = "col";
+        const button = document.createElement("button");
+        button.type = "button"; button.textContent = label;
+        button.addEventListener("click", () => toggleTargetGroup(input => input.dataset.shape === shape));
+        cell.append(button); head.append(cell);
+      }
+      document.getElementById("target-head").append(head);
+      for (const [color, [label, hex]] of Object.entries(targetColors)) {
+        const row = document.createElement("tr");
+        const title = document.createElement("th"); title.scope = "row";
+        const button = document.createElement("button"); button.type = "button"; button.textContent = label;
+        button.addEventListener("click", () => toggleTargetGroup(input => input.dataset.color === color));
+        title.append(button); row.append(title);
+        for (const shape of Object.keys(targetShapes)) {
+          const cell = document.createElement("td");
+          const choice = document.createElement("label"); choice.className = "target-choice";
+          const input = document.createElement("input"); input.type = "checkbox"; input.value = `${color}:${shape}`;
+          input.dataset.color = color; input.dataset.shape = shape;
+          input.setAttribute("aria-label", `${label} ${targetShapes[shape]}`);
+          input.addEventListener("change", editTargets);
+          const icon = document.createElement("span"); icon.className = `target-shape ${shape}`;
+          icon.style.setProperty("--target-color", hex); icon.setAttribute("aria-hidden", "true");
+          choice.append(input, icon); cell.append(choice); row.append(cell);
+        }
+        document.getElementById("target-options").append(row);
+      }
+      document.getElementById("targets-all").addEventListener("click", () => { targetInputs().forEach(input => { input.checked = true; }); editTargets(); });
+      document.getElementById("targets-none").addEventListener("click", () => { targetInputs().forEach(input => { input.checked = false; }); editTargets(); });
+      document.getElementById("fire-mode").addEventListener("change", editTargets);
+      document.getElementById("save-targets").addEventListener("click", saveTargets);
+      document.getElementById("start-mission").addEventListener("click", startMission);
+    }
+    function syncTargetPolicy(policy, force = false) {
+      if (!policy || targetSaving && !force) return;
+      if (targetPolicy && policy.revision < targetPolicy.revision) return;
+      const changed = !targetPolicy || targetPolicy.revision !== policy.revision;
+      targetPolicy = policy;
+      document.querySelectorAll(".target-controls button, .target-controls select, .target-controls input").forEach(control => { control.disabled = !policy.enabled || targetSaving; });
+      if (force || changed && !targetDirty) {
+        targetInputs().forEach(input => { input.checked = policy.selected === "all" || policy.selected.includes(input.value); });
+        document.getElementById("fire-mode").value = policy.fire_mode;
+        const count = targetInputs().filter(input => input.checked).length;
+        document.getElementById("target-message").textContent = !policy.enabled ? "ระบบตรวจเป้าปิดอยู่ใน config" :
+          `${force ? "บันทึกแล้ว" : "ค่าปัจจุบัน"} · ${count} คู่ · ${policy.fire_mode === "gel" ? "กระสุนเจล" : "Infrared"} · ใช้ในการตรวจผนังถัดไป${count === 0 ? " · ไม่ยิงเป้า" : ""}`;
+      }
+      updateTargetCount();
+    }
+    async function saveTargets() {
+      targetSaving = true; updateTargetCount();
+      document.querySelectorAll(".target-controls button, .target-controls select, .target-controls input").forEach(control => { control.disabled = true; });
+      const selected = targetInputs().filter(input => input.checked).map(input => input.value);
+      try {
+        const response = await fetch("/api/targets", {method: "POST", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({selected: selected.length === 16 ? "all" : selected, fire_mode: document.getElementById("fire-mode").value})});
+        if (!response.ok) throw new Error("บันทึกไม่สำเร็จ กรุณาลองอีกครั้ง");
+        const policy = await response.json(); targetDirty = false; targetSaving = false; syncTargetPolicy(policy, true);
+      } catch (error) {
+        targetSaving = false; syncTargetPolicy(targetPolicy);
+        document.getElementById("target-message").textContent = error.message;
+      }
+    }
+    async function startMission() {
+      if (!missionControl?.requires_start || missionControl.started || missionStarting || targetSaving) return;
+      const selected = targetInputs().filter(input => input.checked).map(input => input.value);
+      const policy = {selected: selected.length === 16 ? "all" : selected, fire_mode: document.getElementById("fire-mode").value};
+      missionStarting = true; targetSaving = true; missionStartError = ""; updateTargetCount();
+      document.querySelectorAll(".target-controls button, .target-controls select, .target-controls input").forEach(control => { control.disabled = true; });
+      try {
+        const response = await fetch("/api/mission/start", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(policy)});
+        if (!response.ok) throw new Error("เริ่มไม่สำเร็จ กรุณาตรวจสถานะแล้วลองอีกครั้ง");
+        const result = await response.json();
+        targetDirty = false; targetSaving = false; missionStarting = false;
+        syncMissionControl({requires_start: true, started: result.started});
+        syncTargetPolicy(result.target_policy, true);
+      } catch (error) {
+        targetSaving = false; missionStarting = false; missionStartError = error.message;
+        syncTargetPolicy(targetPolicy); renderMissionControl();
+      }
+    }
+    buildTargetControls();
 
     function number(value, digits = 2) {
       return typeof value === "number" && Number.isFinite(value) ? value.toFixed(digits) : "—";
@@ -181,14 +348,14 @@
         drawSlamMap(ctx, w, h, slamMap);
         return;
       }
-      ctx.strokeStyle = "#1c3342";
+      ctx.strokeStyle = "#dce5ee";
       ctx.lineWidth = 1;
       for (let x = 0; x < w; x += 40) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke(); }
       for (let y = 0; y < h; y += 40) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke(); }
 
       const points = (history.position || []).filter(sample => sample[2] && sample[2].length >= 2);
       if (!points.length) {
-        ctx.fillStyle = "#91a5b6"; ctx.textAlign = "center";
+        ctx.fillStyle = "#63758a"; ctx.textAlign = "center";
         ctx.fillText("รอตำแหน่งจากหุ่นยนต์", w / 2, h / 2);
         return;
       }
@@ -202,14 +369,14 @@
       const project = (x, y) => [w / 2 + (y - midY) * scale, h / 2 - (x - midX) * scale];
 
       const origin = project(0, 0);
-      ctx.fillStyle = "#94aab9"; ctx.beginPath(); ctx.arc(...origin, 3, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "#64788b"; ctx.beginPath(); ctx.arc(...origin, 3, 0, Math.PI * 2); ctx.fill();
       ctx.fillText("start", origin[0] + 8, origin[1] - 7);
       ctx.beginPath();
       points.forEach((sample, index) => {
         const p = project(Number(sample[2][0]), Number(sample[2][1]));
         if (index === 0) ctx.moveTo(...p); else ctx.lineTo(...p);
       });
-      ctx.strokeStyle = "#69d9ff"; ctx.lineWidth = 2.5; ctx.stroke();
+      ctx.strokeStyle = "#247bbb"; ctx.lineWidth = 2.5; ctx.stroke();
 
       const end = points[points.length - 1];
       const [cx, cy] = project(Number(end[2][0]), Number(end[2][1]));
@@ -220,12 +387,12 @@
       ctx.moveTo(cx + forward[0] * 18, cy + forward[1] * 18);
       ctx.lineTo(cx - forward[0] * 12 + side[0] * 10, cy - forward[1] * 12 + side[1] * 10);
       ctx.lineTo(cx - forward[0] * 12 - side[0] * 10, cy - forward[1] * 12 - side[1] * 10);
-      ctx.closePath(); ctx.fillStyle = "#ffb868"; ctx.fill();
+      ctx.closePath(); ctx.fillStyle = "#c45e24"; ctx.fill();
       if (latest.gimbal) {
         const gimbalYaw = yaw + Number(latest.gimbal[1]) * Math.PI / 180;
         ctx.beginPath(); ctx.moveTo(cx, cy);
         ctx.lineTo(cx + Math.sin(gimbalYaw) * 34, cy - Math.cos(gimbalYaw) * 34);
-        ctx.strokeStyle = "#8df3d3"; ctx.lineWidth = 3; ctx.stroke();
+        ctx.strokeStyle = "#168760"; ctx.lineWidth = 3; ctx.stroke();
       }
 
       let older = points[0];
@@ -264,16 +431,16 @@
       const drawnW = worldY * scale, drawnH = worldX * scale;
       const left = (w - drawnW) / 2, bottom = (h + drawnH) / 2;
       const cell = Math.max(1, resolution * scale);
-      ctx.fillStyle = "#09141d"; ctx.fillRect(left, bottom - drawnH, drawnW, drawnH);
+      ctx.fillStyle = "#f7f9fc"; ctx.fillRect(left, bottom - drawnH, drawnW, drawnH);
       if (showFine) for (let iy = 0; iy < map.height; iy++) {
         for (let ix = 0; ix < map.width; ix++) {
           const value = map.data[iy * map.width + ix];
           if (value < 0) continue;
-          ctx.fillStyle = value >= 65 ? "#ffb868" : value <= 19 ? "#173746" : "#677b83";
+          ctx.fillStyle = value >= 65 ? "#c45e24" : value <= 19 ? "#ffffff" : "#d6dee6";
           ctx.fillRect(left + iy * cell, bottom - (ix + 1) * cell, cell + .3, cell + .3);
         }
       }
-      ctx.strokeStyle = "#29404f"; ctx.lineWidth = 1;
+      ctx.strokeStyle = "#d5e0ea"; ctx.lineWidth = 1;
       if (showFine) for (let meter = 0; meter <= Math.max(worldX, worldY); meter++) {
         const x = left + meter * scale, y = bottom - meter * scale;
         if (meter <= worldY) { ctx.beginPath(); ctx.moveTo(x, bottom - drawnH); ctx.lineTo(x, bottom); ctx.stroke(); }
@@ -288,19 +455,19 @@
           if (grid.current?.[0] === ix && grid.current?.[1] === iy) {
             ctx.beginPath();
             [[-.5,-.5],[-.5,.5],[.5,.5],[.5,-.5]].forEach((d,i) => {const p=project(gridPoint(ix+d[0],iy+d[1])); if(i) ctx.lineTo(...p); else ctx.moveTo(...p);});
-            ctx.closePath(); ctx.fillStyle="#194437"; ctx.fill();
+            ctx.closePath(); ctx.fillStyle="#e0f2e9"; ctx.fill();
           }
           for (const [name, ends] of Object.entries(endpoints)) {
             const state = c.sides[name]?.state || "unknown";
             const inferred = c.sides[name]?.source === "inferred";
-            ctx.strokeStyle = state === "wall" ? "#ffb868" : state === "open" ? "#8cf1d255" : "#718594";
+            ctx.strokeStyle = state === "wall" ? "#c45e24" : state === "open" ? "#16876055" : "#718594";
             ctx.lineWidth = state === "wall" ? 4 : 1;
             ctx.setLineDash(state === "unknown" ? [4,4] : inferred ? [6,3] : []);
             ctx.beginPath(); ctx.moveTo(...project(gridPoint(ix+ends[0][0],iy+ends[0][1]))); ctx.lineTo(...project(gridPoint(ix+ends[1][0],iy+ends[1][1]))); ctx.stroke();
           }
           ctx.setLineDash([]);
           if (grid.cell_size_m * scale >= 32) {
-            const p=project(gridPoint(ix,iy)); ctx.fillStyle="#a9bfcb"; ctx.textAlign="center"; ctx.font="10px system-ui"; ctx.fillText(`${ix},${iy}`,p[0],p[1]+14);
+            const p=project(gridPoint(ix,iy)); ctx.fillStyle="#61778a"; ctx.textAlign="center"; ctx.font="10px system-ui"; ctx.fillText(`${ix},${iy}`,p[0],p[1]+14);
           }
         }
         const current=grid.cells.find(c => c.index[0]===grid.current?.[0] && c.index[1]===grid.current?.[1]);
@@ -371,7 +538,8 @@
         pointing: "หันกล้อง",
         searching: "หาตัวเป้า",
         aiming: "เล็ง",
-        target_locked: "ล็อกเป้าแล้ว ปรับมุมยิง IR",
+        target_locked: "ล็อกเป้าแล้ว ปรับมุมยิง",
+        no_target_selected: "ไม่เลือกเป้าหมาย · ข้ามการยิง",
         restoring_scan_angle: "คืนมุมสแกน",
         waiting_target_safety: "รอข้อมูลความปลอดภัย",
         waiting_target_action: "รอ SDK ปลดคำสั่งกิมบอล",
@@ -380,7 +548,7 @@
         stopped: "หยุดระหว่างตรวจเป้า",
       };
       document.getElementById("target-inspections").textContent = map.exploration?.target_inspection_enabled
-        ? `ตรวจเป้าที่กำแพง ${inspections.length} ขอบ · SDK รับคำสั่งยิง infrared ${accepted} ครั้ง`+
+        ? `ตรวจเป้าที่กำแพง ${inspections.length} ขอบ · SDK รับคำสั่งยิง ${accepted} นัด`+
           (progressNames[progress?.status]
             ? ` · ${progressNames[progress.status]} ช่อง ${progress.cell?.join(",")} ทิศ ${progress.direction?.join(",")} ${progress.target ? `(${progress.target.color}/${progress.target.shape})` : ""}`+
               (progress.target_pitch_deg != null ? ` · pitch ${progress.pitch_frame === "chassis" ? "ตัวรถ" : "พื้น"} ${progress.actual_pitch_deg ?? "—"}°/${progress.target_pitch_deg}°` : "")+
@@ -388,29 +556,29 @@
               (progress.error ? ` · ${progress.error}` : "")+
               (progress.action_state ? ` · action ${progress.action_state}` : "") : "")+
           (latestInspection ? ` · ล่าสุดช่อง ${latestInspection.cell?.join(",")} ทิศ ${latestInspection.direction?.join(",")} ${latestInspection.status}`+
-            (latestInspection.targets?.length ? ` · ${latestInspection.targets.map(item=>`${item.color || "—"}/${item.shape || "—"}: ${item.status}${item.shots_requested ? ` ${item.shots_requested} นัด${item.aim_mode === "closest_reachable" ? " (จุดใกล้กลางที่สุด)" : item.lock_before_aim ? " (ล็อกก่อนเล็ง)" : ""}` : ""}`).join(", ")}` : "") : "")
+            (latestInspection.targets?.length ? ` · ${latestInspection.targets.map(item=>`${item.color || "—"}/${item.shape || "—"}: ${item.status}${item.shots_requested ? ` ${item.shots_requested} นัด (${item.fire_mode === "gel" ? "Gel" : "Infrared"})${item.aim_mode === "closest_reachable" ? " (จุดใกล้กลางที่สุด)" : item.lock_before_aim ? " (ล็อกก่อนเล็ง)" : ""}` : ""}`).join(", ")}` : "") : "")
         : "ตรวจเป้าที่กำแพง: ปิด";
       const route = map.trajectory || [];
       for (const lane of map.exploration?.ir_lanes || []) {
         const points=lane.anchors_m.map(point=>project(point.map((v,i)=>v+lane.offset_m[i])));
         ctx.beginPath(); ctx.moveTo(...points[0]); ctx.lineTo(...points[1]);
-        ctx.strokeStyle="#ff73cb"; ctx.lineWidth=3; ctx.stroke();
+        ctx.strokeStyle="#b73587"; ctx.lineWidth=3; ctx.stroke();
       }
       if (route.length) {
         ctx.beginPath();
         route.forEach((point, index) => { const p = project(point); if (!index) ctx.moveTo(...p); else ctx.lineTo(...p); });
-        ctx.strokeStyle = "#69d9ff"; ctx.lineWidth = 2.4; ctx.stroke();
+        ctx.strokeStyle = "#247bbb"; ctx.lineWidth = 2.4; ctx.stroke();
       }
       const plannedRoute = map.exploration?.route_points || [];
       if (plannedRoute.length > 1) {
         ctx.beginPath();
         plannedRoute.forEach((point, index) => { const p = project(point); if (!index) ctx.moveTo(...p); else ctx.lineTo(...p); });
-        ctx.strokeStyle = "#ffd166"; ctx.lineWidth = 3; ctx.stroke();
+        ctx.strokeStyle = "#ae7807"; ctx.lineWidth = 3; ctx.stroke();
       }
       for (const point of map.exploration?.visited_points || []) {
         const [x, y] = project(point);
         ctx.beginPath(); ctx.arc(x, y, 3.2, 0, Math.PI * 2);
-        ctx.fillStyle = "#8cf1d2"; ctx.fill();
+        ctx.fillStyle = "#168760"; ctx.fill();
       }
       if (map.pose) {
         const [cx, cy] = project(map.pose), yaw = Number(map.pose[2]) * Math.PI / 180;
@@ -418,7 +586,7 @@
         ctx.beginPath(); ctx.moveTo(cx + forward[0] * 11, cy + forward[1] * 11);
         ctx.lineTo(cx - forward[0] * 7 + side[0] * 6, cy - forward[1] * 7 + side[1] * 6);
         ctx.lineTo(cx - forward[0] * 7 - side[0] * 6, cy - forward[1] * 7 - side[1] * 6);
-        ctx.closePath(); ctx.fillStyle = "#f5fbff"; ctx.fill();
+        ctx.closePath(); ctx.fillStyle = "#172b42"; ctx.fill();
         const gimbal = latest.gimbal;
         if (gimbal) {
           const sensor = map.sensor_model || {};
@@ -431,7 +599,7 @@
           const [sensorX, sensorY] = project([sensorWorldX, sensorWorldY]);
           ctx.beginPath(); ctx.moveTo(sensorX, sensorY);
           ctx.lineTo(sensorX + Math.sin(direction) * 20, sensorY - Math.cos(direction) * 20);
-          ctx.strokeStyle = "#8df3d3"; ctx.lineWidth = 3; ctx.stroke();
+          ctx.strokeStyle = "#168760"; ctx.lineWidth = 3; ctx.stroke();
           document.getElementById("gimbal-map").textContent = `yaw เทียบรถ ${number(gimbal[1])}° · pitch เทียบรถ ${number(gimbal[0])}° · pitch อ้างอิง ${number(gimbal[2])}°`;
         } else document.getElementById("gimbal-map").textContent = "—";
       }
@@ -527,7 +695,7 @@
       const pw = Math.max(1, w - margin.left - margin.right);
       const ph = Math.max(1, h - margin.top - margin.bottom);
       ctx.clearRect(0, 0, w, h);
-      ctx.font = "11px system-ui"; ctx.fillStyle = "#8ea7b7";
+      ctx.font = "11px system-ui"; ctx.fillStyle = "#63758a";
       if (!samples.length) { ctx.fillText("รอข้อมูล…", margin.left, h / 2); return; }
 
       const t0 = samples[0][1];
@@ -552,7 +720,7 @@
       const pad = (max - min) * 0.08; min -= pad; max += pad;
       const px = t => margin.left + (t - t0) / (t1 - t0) * pw;
       const py = v => margin.top + (max - v) / (max - min) * ph;
-      ctx.strokeStyle = "#29404f"; ctx.lineWidth = 1;
+      ctx.strokeStyle = "#d5e0ea"; ctx.lineWidth = 1;
       for (let i = 0; i <= 2; i++) {
         const y = margin.top + i * ph / 2;
         ctx.beginPath(); ctx.moveTo(margin.left, y); ctx.lineTo(w - margin.right, y); ctx.stroke();
@@ -579,7 +747,7 @@
           if (Math.abs(visible[i][1] - targetTime) < Math.abs(visible[best][1] - targetTime)) best = i;
         }
         const selected = visible[best];
-        ctx.strokeStyle = "#dcebf0"; ctx.setLineDash([4, 4]);
+        ctx.strokeStyle = "#6b7e91"; ctx.setLineDash([4, 4]);
         ctx.beginPath(); ctx.moveTo(px(selected[1]), margin.top); ctx.lineTo(px(selected[1]), margin.top + ph); ctx.stroke(); ctx.setLineDash([]);
         card.readout.innerHTML = `<b>${number(selected[1], 2)} s</b> · ` +
           fields(name, selected[2]).map(([label, value]) => `${label}: <b>${number(value)}</b>`).join(" · ");
@@ -597,6 +765,8 @@
         ]);
         if (!statusResponse.ok || !historyResponse.ok || !mapResponse.ok) throw new Error("server response failed");
         const status = await statusResponse.json();
+        syncTargetPolicy(status.target_policy);
+        syncMissionControl(status.mission_control);
         const update = await historyResponse.json();
         slamMap = await mapResponse.json();
         latest = status.streams;
@@ -640,7 +810,7 @@
               ir.state === "calibrating" ? `กำลังเทียบค่า (IO ${sensor?.io ?? "—"})` :
               sensor?.detected == null ? "รอข้อมูล" :
               `${sensor.detected ? "พบสิ่งกีดขวาง" : "ว่าง"} (IO ${sensor.io} · active ${sensor.active_io}${sensor.source?.startsWith("direct") ? " · direct" : ""})`;
-            label.style.color = sensor?.detected ? "#ffb868" : "";
+            label.style.color = sensor?.detected ? "#c45e24" : "";
           }
           document.getElementById(`${prefix}-state`).textContent = !ir?.enabled ? "ระบบ IR ปิด" :
             ir.state === "calibrating" ? `กำลัง Auto-calibrate ${ir.calibration?.samples ?? 0}/${ir.calibration?.required_samples ?? 0} · ต้องไม่มีสิ่งกีดขวางรอบรถ` :

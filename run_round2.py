@@ -266,6 +266,7 @@ def main():
             color_ranges=config["color_ranges"],
             motion_settings=logger.motion_settings,
             rear_ir=chassis.rear_ir, front_ir=chassis.front_ir,
+            mission_start_required=True,
         )
         dashboard.start()
         host = config["dashboard"]["host"]
@@ -300,6 +301,7 @@ def main():
             color_ranges=config["color_ranges"],
         )
 
+        dashboard.wait_for_mission_start(chassis)
         start_time = time.time()
         print("\n=== Executing Round 2 Mission ===")
 

@@ -155,6 +155,12 @@ class RunStore:
                                "message": "Target inspection stopped at cell {} direction {}: {}".format(
                                    inspection.get("cell"), inspection.get("direction"),
                                    inspection.get("reason", "unknown cause"))})
+            if inspection.get("status") == "no_target_selected":
+                issues.append({"level": "info", "time_s": None,
+                               "message": "Target inspection skipped at cell {}: no targets selected "
+                                          "(policy revision {})".format(
+                                              inspection.get("cell"),
+                                              (inspection.get("target_policy") or {}).get("revision", 0))})
             for target in inspection.get("targets", []):
                 if target.get("status") not in ("fire_command_accepted",):
                     issues.append({"level": "warning", "time_s": None,

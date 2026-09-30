@@ -425,7 +425,7 @@ def load_config(path=DEFAULT_CONFIG):
     colors = set(color_ranges)
     shapes = {"circle", "square", "horizontal", "vertical"}
     if selected != "all":
-        if (not isinstance(selected, list) or not selected or
+        if (not isinstance(selected, list) or
                 any(not isinstance(item, str) or len(item.split(":")) != 2 or
                     item.split(":")[0] not in colors or item.split(":")[1] not in shapes
                     for item in selected)):
@@ -473,8 +473,8 @@ def load_config(path=DEFAULT_CONFIG):
         sf = target["search_frames"]
         if type(sf) is not int or sf < target["confirm_frames"]:
             raise ValueError("exploration.target_inspection.search_frames must be an integer >= confirm_frames")
-    if target.get("fire_mode") != "infrared":
-        raise ValueError("exploration.target_inspection.fire_mode must be infrared")
+    if target.get("fire_mode") not in ("infrared", "gel"):
+        raise ValueError("exploration.target_inspection.fire_mode must be infrared or gel")
     if exploration["enabled"]:
         if config["mission"].get("enabled"):
             raise ValueError("mission and exploration cannot both be enabled")

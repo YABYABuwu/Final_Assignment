@@ -18,7 +18,7 @@ PAGE = Path(__file__).resolve().parent.parent / "dashboard" / "index.html"
 class Dashboard:
     def __init__(self, robot, logger, settings, slam_map=None, slam_worker=None,
                  explorer=None, motion_settings=None, rear_ir=None, front_ir=None,
-                 target_settings=None, color_ranges=None):
+                 target_settings=None, color_ranges=None, mission_start_required=False):
         self.camera = robot.camera
         self.logger = logger
         self.settings = settings
@@ -29,6 +29,16 @@ class Dashboard:
         self.rear_ir = rear_ir
         self.front_ir = front_ir
         self.target_settings = target_settings
+        self.target_policy_lock = threading.Lock()
+        self.target_policy_revision = 0
+        self.mission_start_required = mission_start_required
+        self.mission_started = threading.Event()
+        self.mission_start_lock = threading.Lock()
+        self.target_policy = {
+            "selected": list(target_settings["selected"]) if target_settings and
+                        target_settings["selected"] != "all" else "all",
+            "fire_mode": target_settings.get("fire_mode", "infrared") if target_settings else "infrared",
+        }
         self.color_ranges = color_ranges
         self.running = threading.Event()
         self.frame_changed = threading.Condition()
@@ -48,11 +58,65 @@ class Dashboard:
             "last_skip_reason": None,
         }
         self.logger.camera_health = self.camera_health
-        self.mission_status = "Ready"
+        self.mission_status = "รอเลือกเป้าและกดเริ่มภารกิจ" if mission_start_required else "Ready"
         self.camera_thread = None
         self.server_thread = None
         self.server = None
         self.camera_started = False
+
+    def target_policy_snapshot(self):
+        """Return one consistent policy; inspection freezes it for each wall."""
+        with self.target_policy_lock:
+            selected = self.target_policy["selected"]
+            return {"selected": list(selected) if selected != "all" else "all",
+                    "fire_mode": self.target_policy["fire_mode"],
+                    "revision": self.target_policy_revision,
+                    "enabled": bool(self.target_settings and self.target_settings["enabled"])}
+
+    def update_target_policy(self, document):
+        if not self.target_settings or not self.target_settings["enabled"]:
+            raise ValueError("target inspection is disabled in config")
+        if not isinstance(document, dict):
+            raise ValueError("target settings must be a JSON object")
+        selected, mode = document.get("selected"), document.get("fire_mode")
+        pairs = {color + ":" + shape for color in ("red", "green", "yellow", "blue")
+                 for shape in ("circle", "square", "horizontal", "vertical")}
+        if selected != "all" and (not isinstance(selected, list) or
+                                   any(not isinstance(pair, str) or pair not in pairs for pair in selected)):
+            raise ValueError("selected must be all or a list of supported COLOR:SHAPE pairs")
+        if mode not in ("infrared", "gel"):
+            raise ValueError("fire_mode must be infrared or gel")
+        with self.target_policy_lock:
+            self.target_policy = {"selected": sorted(set(selected)) if selected != "all" else "all",
+                                  "fire_mode": mode}
+            self.target_policy_revision += 1
+        return self.target_policy_snapshot()
+
+    def start_mission(self, document):
+        """Save the displayed selection before releasing the one-shot start gate."""
+        if not isinstance(document, dict):
+            raise ValueError("mission start settings must be a JSON object")
+        with self.mission_start_lock:
+            if not self.mission_start_required or self.mission_started.is_set():
+                raise ValueError("mission start is unavailable or already requested")
+            if not self.running.is_set():
+                raise ValueError("dashboard is not running")
+            if self.camera_error is not None:
+                raise ValueError(self.camera_error)
+            if self.target_settings and self.target_settings["enabled"]:
+                self.update_target_policy(document)
+            self.mission_status = "กำลังเริ่มภารกิจ"
+            self.mission_started.set()
+        return {"started": True, "target_policy": self.target_policy_snapshot()}
+
+    def wait_for_mission_start(self, chassis):
+        """Keep wheels stopped without starting navigation or target inspection."""
+        if not self.mission_start_required:
+            return
+        chassis.stop()
+        while not self.mission_started.wait(.1):
+            if not self.running.is_set() or self.camera_error is not None:
+                raise MissionStop(self.camera_error or "dashboard stopped before mission start")
 
     def _skip_camera_frame(self, reason):
         """Discard a missing/broken frame without stopping the dashboard."""
@@ -162,7 +226,7 @@ class Dashboard:
                     ):
                         from src.targets import detect
 
-                        selected = self.target_settings["selected"]
+                        selected = self.target_policy_snapshot()["selected"]
                         selected = (
                             None
                             if selected == "all"
@@ -390,9 +454,12 @@ class Dashboard:
             "camera_ready": camera_ready,
             "camera_targets": camera_targets,
             "target_detection": target_detection,
+            "target_policy": self.target_policy_snapshot(),
             "camera_error": self.camera_error,
             "camera_health": camera_health,
             "mission_status": self.mission_status,
+            "mission_control": {"requires_start": self.mission_start_required,
+                                "started": self.mission_started.is_set()},
             "round2_navigation": getattr(self.logger, "round2_navigation", None),
             "round2_alignment": getattr(self.logger, "round2_alignment", None),
             "motion_settings": self.motion_settings,
@@ -500,6 +567,30 @@ class Dashboard:
                     self.send_error(404)
 
             def do_POST(self):
+                if urlsplit(self.path).path == "/api/mission/start":
+                    try:
+                        length = int(self.headers.get("Content-Length", "0"))
+                        if not 0 < length <= 4096:
+                            raise ValueError("start JSON must be between 1 and 4096 bytes")
+                        document = json.loads(self.rfile.read(length).decode("utf-8"))
+                        result = dashboard.start_mission(document)
+                    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
+                        self.send_error(400, str(error))
+                        return
+                    self._send_content("application/json; charset=utf-8", json.dumps(result).encode("utf-8"))
+                    return
+                if urlsplit(self.path).path == "/api/targets":
+                    try:
+                        length = int(self.headers.get("Content-Length", "0"))
+                        if not 0 < length <= 4096:
+                            raise ValueError("target JSON must be between 1 and 4096 bytes")
+                        document = json.loads(self.rfile.read(length).decode("utf-8"))
+                        policy = dashboard.update_target_policy(document)
+                    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
+                        self.send_error(400, str(error))
+                        return
+                    self._send_content("application/json; charset=utf-8", json.dumps(policy).encode("utf-8"))
+                    return
                 if urlsplit(self.path).path != "/api/map/import":
                     self.send_error(404)
                     return

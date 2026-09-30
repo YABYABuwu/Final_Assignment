@@ -93,7 +93,8 @@ def main():
                                   rear_ir=chassis.rear_ir, front_ir=chassis.front_ir,
                                   target_settings=(exploration_settings["target_inspection"]
                                                    if explorer is not None else None),
-                                  color_ranges=config["color_ranges"])
+                                  color_ranges=config["color_ranges"],
+                                  mission_start_required=(exploration_settings["enabled"] or config["mission"]["enabled"]))
             dashboard.start()
             if explorer is not None and exploration_settings["target_inspection"]["enabled"]:
                 from robomaster import blaster as sdk_blaster
@@ -106,6 +107,9 @@ def main():
             host = config["dashboard"]["host"]
             port = config["dashboard"]["port"]
             print(f"Dashboard: http://{host}:{port}")
+
+        if dashboard is not None:
+            dashboard.wait_for_mission_start(chassis)
 
         if exploration_settings["enabled"]:
             if dashboard is not None:
