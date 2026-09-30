@@ -255,8 +255,11 @@ class ChassisController:
                 else None
             )
 
+            both_sides = (sensors.get("right", {}).get("detected") is True and
+                          sensors.get("left", {}).get("detected") is True)
             if (
                 destination_side
+                and not both_sides
                 and (
                     sensors[destination_side]["detected"]
                     is not False

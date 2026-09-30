@@ -55,11 +55,13 @@ def recovery_vector(sides, speed, attempt=1, end="rear", mode="staged",
         else:
             mode = "cardinal"
 
-    # Both sides blocked: escape purely longitudinally
+    # Both sides blocked: escape purely longitudinally if clear, or fall back to lateral slide
     if right and left:
-        if mode == "cardinal" and not forward_clear:
-            return "blocked", 0.0, 0.0
-        return ("forward" if end == "rear" else "backward"), longitudinal, 0.0
+        if forward_clear:
+            return ("forward" if end == "rear" else "backward"), longitudinal, 0.0
+        if attempt % 2 == 0:
+            return "slide_right", 0.0, speed
+        return "slide_left", 0.0, -speed
 
     # Alternate cardinal axes between attempts so a blocked first escape does
     # not repeat forever in the same direction.

@@ -748,6 +748,40 @@ class RearIRTests(unittest.TestCase):
         self.assertTrue(opp_blocked)
         self.assertEqual(opp_side, "right")
 
+    def test_both_front_ir_falls_back_to_lateral_when_rear_is_blocked(self):
+        settings_f = dict(self.config["front_ir"], auto_calibrate_io=False, io_read_mode="stream")
+        settings_f["left"] = dict(settings_f["left"], active_io=0)
+        settings_f["right"] = dict(settings_f["right"], active_io=0)
+        front = FrontIRBumper(self.logger, settings_f)
+
+        settings_r = dict(self.config["rear_ir"], auto_calibrate_io=False, io_read_mode="stream")
+        settings_r["left"] = dict(settings_r["left"], active_io=0)
+        settings_r["right"] = dict(settings_r["right"], active_io=0)
+        rear = RearIRBumper(self.logger, settings_r)
+
+        motion = dict(self.config["motion"], control_period_s=0.001)
+        chassis = ChassisController(self.robot, self.logger, motion)
+        chassis.front_ir = front
+        chassis.rear_ir = rear
+        chassis.get_pose = lambda: (0.0, 0.0, 0.0)
+
+        # Front both blocked (0), rear-left blocked (0), rear-right clear (1)
+        io = [1] * 12
+        io[adapter_index(settings_f["left"]["id"], settings_f["left"]["port"])] = 0
+        io[adapter_index(settings_f["right"]["id"], settings_f["right"]["port"])] = 0
+        io[adapter_index(settings_r["left"]["id"], settings_r["left"]["port"])] = 0
+        self.adapter.callback((io, [0] * 12))
+
+        # Because rear-left is blocked, backward is blocked and sliding left is blocked.
+        # It must choose sliding right!
+        vector, reason = chassis._adaptive_ir_escape(
+            front, {"right": {"detected": True}, "left": {"detected": True}},
+            0.08, attempt=1, movement_axis="longitudinal",
+            longitudinal_clear=False, clearance_reason="rear IR left detected")
+        self.assertEqual(vector[0], "slide_right")
+        self.assertGreater(vector[2], 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()
+
