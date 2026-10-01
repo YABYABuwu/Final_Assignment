@@ -267,6 +267,7 @@ def main():
             motion_settings=logger.motion_settings,
             rear_ir=chassis.rear_ir, front_ir=chassis.front_ir,
             mission_start_required=True,
+            page_path=project_dir / "dashboard" / "round2.html",
         )
         dashboard.start()
         host = config["dashboard"]["host"]
@@ -286,7 +287,8 @@ def main():
             def resume_mapping(self): pass
 
         slam_stub = _NoOpSlamWorker()
-        fire_type_val = blaster.INFRARED_FIRE
+        config["exploration"]["target_inspection"]["fire_mode"] = "gel"
+        fire_type_val = blaster.WATER_FIRE
         inspector = WallTargetInspector(
             ep_robot.gimbal,
             ep_robot.blaster,
@@ -374,7 +376,26 @@ def main():
                     target_pos = action["target_pos"]
                     target_color = action.get("target_color", "")
                     target_shape = action.get("target_shape", "")
-                    target_pitch = config["exploration"]["target_inspection"].get("pitch_deg", -20.0)
+                    dist_cells = action.get("distance_cells", 0)
+
+                    default_pitch = config["exploration"]["target_inspection"].get("pitch_deg", -20.0)
+                    default_min_area = config["exploration"]["target_inspection"].get("min_area_fraction", 0.02)
+                    default_selected = config["exploration"]["target_inspection"].get("selected", "all")
+
+                    # Distance-adaptive pitch and min_area_fraction
+                    if dist_cells >= 1:
+                        target_pitch = -7.0  # 1 tile away: level camera towards wall height, not floor
+                        inspector.settings["target_inspection"]["min_area_fraction"] = 0.006
+                    else:
+                        target_pitch = default_pitch
+                        inspector.settings["target_inspection"]["min_area_fraction"] = default_min_area
+
+                    # Target-specific filtering from Round 1 data
+                    if target_color and target_shape:
+                        inspector.settings["target_inspection"]["selected"] = [f"{target_color}:{target_shape}"]
+                    else:
+                        inspector.settings["target_inspection"]["selected"] = default_selected
+
                     grid_yaw = action["gimbal_yaw_deg"]  # degrees, grid frame
                     base_yaw = grid_map.base_pose[2]     # map rotation in world frame
                     world_yaw = _math.fmod(grid_yaw + base_yaw + 540.0, 360.0) - 180.0
@@ -385,15 +406,42 @@ def main():
                         side_deltas = {"x+": (1, 0), "x-": (-1, 0), "y+": (0, -1), "y-": (0, 1)}
                         direction_delta = side_deltas.get(side, (0, -1))
 
-                    print(f"  -> Standpoint for {target_id} ({target_color} {target_shape}) at {target_pos}, world_yaw={world_yaw:.1f} deg, pitch={target_pitch:.1f} deg")
-                    result = inspector.inspect(
-                        cell=sp,
-                        delta=direction_delta,
-                        world_yaw=world_yaw,
-                        body_yaw=body_yaw,
-                        initial_pitch=target_pitch,
-                    )
+                    print(f"  -> Standpoint for {target_id} ({target_color} {target_shape}) at {target_pos} (dist={dist_cells}), world_yaw={world_yaw:.1f} deg, pitch={target_pitch:.1f} deg")
+                    try:
+                        result = inspector.inspect(
+                            cell=sp,
+                            delta=direction_delta,
+                            world_yaw=world_yaw,
+                            body_yaw=body_yaw,
+                            initial_pitch=target_pitch,
+                        )
+                    finally:
+                        # Restore default settings
+                        inspector.settings["target_inspection"]["min_area_fraction"] = default_min_area
+                        inspector.settings["target_inspection"]["selected"] = default_selected
+
                     print(f"  -> Inspection result for {target_id}: {result.get('status')} targets={result.get('targets')}")
+
+                    # Fallback blind-fire if camera did not confirm or fire at target
+                    fired = any(t.get("status") == "fire_command_accepted" for t in result.get("targets", []))
+                    if not fired:
+                        print(f"  [Fallback Fire] Camera didn't fire at {target_id}; firing directly at map coordinates (yaw={world_yaw:.1f} deg)...")
+                        try:
+                            chassis_yaw = _math.fmod(world_yaw - body_yaw + 540.0, 360.0) - 180.0
+                            candidates = (chassis_yaw - 360, chassis_yaw, chassis_yaw + 360)
+                            reachable = [v for v in candidates if -250 <= v <= 250]
+                            best_yaw = min(reachable, key=abs) if reachable else chassis_yaw
+                            action_pt = ep_robot.gimbal.moveto(pitch=target_pitch, yaw=best_yaw, pitch_speed=60, yaw_speed=60)
+                            if action_pt is not None:
+                                action_pt.wait_for_completed(timeout=3.0)
+                            ep_robot.blaster.fire(fire_type=fire_type_val, times=2)
+                            time.sleep(0.3)
+                            action_rc = ep_robot.gimbal.moveto(pitch=0, yaw=0, pitch_speed=60, yaw_speed=60)
+                            if action_rc is not None:
+                                action_rc.wait_for_completed(timeout=3.0)
+                            print(f"  -> Fallback fire command completed for {target_id}!")
+                        except Exception as fb_err:
+                            print(f"  -> Fallback fire failed: {fb_err}")
 
         elapsed = time.time() - start_time
         logger.run_status = "completed"

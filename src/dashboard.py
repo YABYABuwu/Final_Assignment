@@ -18,7 +18,9 @@ PAGE = Path(__file__).resolve().parent.parent / "dashboard" / "index.html"
 class Dashboard:
     def __init__(self, robot, logger, settings, slam_map=None, slam_worker=None,
                  explorer=None, motion_settings=None, rear_ir=None, front_ir=None,
-                 target_settings=None, color_ranges=None, mission_start_required=False):
+                 target_settings=None, color_ranges=None, mission_start_required=False,
+                 page_path=None):
+        self.page_path = Path(page_path) if page_path else PAGE
         self.camera = robot.camera
         self.logger = logger
         self.settings = settings
@@ -528,8 +530,14 @@ class Dashboard:
             def do_GET(self):
                 route = urlsplit(self.path).path
                 if route == "/":
-                    content = PAGE.read_bytes()
+                    content = dashboard.page_path.read_bytes()
                     self._send_content("text/html; charset=utf-8", content)
+                elif route == "/api/plan_image":
+                    plan_img = Path(__file__).resolve().parent.parent / "data" / "maps" / "round2_plan.png"
+                    if plan_img.exists():
+                        self._send_content("image/png", plan_img.read_bytes())
+                    else:
+                        self.send_error(404)
                 elif route == "/api/status":
                     content = json.dumps(dashboard.snapshot()).encode("utf-8")
                     self._send_content("application/json; charset=utf-8", content)

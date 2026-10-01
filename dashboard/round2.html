@@ -1,0 +1,401 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RoboMaster Round 2 Dashboard</title>
+  <style>
+    :root { color-scheme: light; font-family: system-ui, sans-serif; background: #f3f6fa; color: #172b42; }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 22px; }
+    header { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin: 0 0 18px; }
+    h1, h2, p { margin: 0; }
+    h1 { font-size: clamp(1.25rem, 2vw, 1.8rem); letter-spacing: .02em; }
+    h2 { font-size: 1rem; font-weight: 650; }
+    .muted { color: #63758a; font-size: .83rem; }
+    .brand { display: flex; align-items: center; gap: 12px; }
+    .brand-mark { width: 12px; height: 32px; border-radius: 4px; background: #258d75; box-shadow: 0 0 18px #36dbb79c; }
+    .live { border: 1px solid #b8dece; background: #e7f6ee; color: #20724e; border-radius: 999px; padding: 8px 12px; white-space: nowrap; font-size: .82rem; }
+    .layout { display: grid; grid-template-columns: minmax(0, 1.12fr) minmax(390px, .88fr); gap: 16px; align-items: start; max-width: 1800px; margin: auto; }
+    .left { display: grid; gap: 16px; min-width: 0; }
+    .card { background: #ffffff; border: 1px solid #dbe4ed; border-radius: 16px; box-shadow: 0 10px 28px #0002; overflow: hidden; }
+    .card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 17px; border-bottom: 1px solid #e3eaf1; }
+    .card-head .muted { text-align: right; }
+    .camera-wrap { position: relative; background: #070d12; aspect-ratio: 16 / 9; min-height: 240px; }
+    .camera-wrap img { display: block; width: 100%; height: 100%; object-fit: contain; }
+    .camera-wrap .top-strip { position: absolute; top: 14px; left: 14px; right: 14px; display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; pointer-events: none; }
+    .tag { background: #08141dcc; color: #eef5f7; border: 1px solid #77ecd469; border-radius: 9px; padding: 7px 10px; backdrop-filter: blur(5px); }
+    .tag strong { color: #98f5dc; font-variant-numeric: tabular-nums; }
+    .crosshair { position: absolute; top: 50%; left: 50%; width: 62px; height: 62px; transform: translate(-50%, -50%); pointer-events: none; filter: drop-shadow(0 0 3px #051817); }
+    .crosshair::before, .crosshair::after { content: ""; position: absolute; background: #8ef4d3; }
+    .crosshair::before { width: 1px; height: 62px; left: 30px; }
+    .crosshair::after { height: 1px; width: 62px; top: 30px; }
+    .crosshair span { position: absolute; left: 25px; top: 25px; width: 11px; height: 11px; border: 1px solid #8ef4d3; border-radius: 50%; background: #061a1a88; }
+    .camera-note { padding: 10px 16px; min-height: 38px; }
+    .camera-targets { padding: 0 16px 12px; color: #456078; font-size: .82rem; line-height: 1.5; }
+    .map-wrap { display: grid; gap: 10px; padding: 14px; }
+    .map-plan-img { display: block; width: 100%; max-height: 380px; object-fit: contain; border-radius: 9px; background: #fff; border: 1px solid #dbe4ed; }
+    .map-info { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr)); gap: 7px 14px; font-size: .8rem; color: #456078; background: #f5f8fc; border: 1px solid #d6e1eb; border-radius: 9px; padding: 9px 11px; }
+    .map-info strong { color: #197357; font-size: 1rem; }
+    .right { min-width: 0; }
+    .graphs { display: grid; gap: 12px; padding: 14px; max-height: calc(100vh - 135px); overflow-y: auto; }
+    .graph { background: #f8fafc; border: 1px solid #dae4ee; border-radius: 11px; padding: 12px; min-width: 0; }
+    .graph-title { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
+    .graph-title strong { text-transform: uppercase; letter-spacing: .07em; font-size: .82rem; }
+    .graph canvas { display: block; width: 100%; height: 140px; cursor: crosshair; }
+    .series-legend { display: flex; flex-wrap: wrap; gap: 5px 12px; margin: 4px 0 9px; color: #61778a; font-size: .69rem; }
+    .series-legend span::before { content: ""; display: inline-block; width: 10px; height: 3px; vertical-align: middle; margin-right: 4px; background: var(--line); }
+    .graph .readout { min-height: 42px; color: #567087; font-size: .76rem; line-height: 1.5; overflow-wrap: anywhere; }
+    .graph .readout b { color: #203a51; }
+    #empty { padding: 24px; text-align: center; }
+
+    /* Round 2 Mission Card */
+    .r2-card { border: 2px solid #20734f; background: #fafdfb; }
+    .r2-header { background: #eef7f2; border-bottom: 1px solid #c9e5d6; }
+    .r2-badge { background: #20734f; color: #fff; padding: 4px 12px; border-radius: 999px; font-weight: 600; font-size: 0.8rem; }
+    .r2-content { padding: 16px; display: grid; gap: 12px; }
+    .r2-info { margin: 0; color: #2d4c3e; font-size: 0.88rem; line-height: 1.6; }
+    .r2-action-bar { display: flex; align-items: center; gap: 14px; padding: 12px 16px; background: #fff; border-radius: 12px; border: 1px solid #d4e7dd; }
+    #start-mission { border: 0; border-radius: 9px; background: #20734f; color: #fff; font: inherit; font-weight: 700; font-size: 1.05rem; padding: 13px 28px; cursor: pointer; box-shadow: 0 4px 14px #20734f38; transition: background 0.15s ease; }
+    #start-mission:hover { background: #185c3e; }
+    #start-mission:disabled { opacity: .5; cursor: default; box-shadow: none; }
+    #mission-start-message { margin: 0; font-size: 0.9rem; color: #3d584b; line-height: 1.5; flex: 1; }
+
+    @media (max-width: 950px) { .layout { grid-template-columns: 1fr; } .graphs { max-height: none; } }
+    @media (max-width: 600px) { body { padding: 12px; } header { align-items: flex-start; } .camera-wrap { min-height: 190px; } }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand"><div class="brand-mark"></div><div><h1>RoboMaster Round 2 Dashboard</h1><p class="muted" id="mission">กำลังรอเริ่มภารกิจ…</p></div></div>
+    <div class="live" id="connection">● กำลังเชื่อมต่อ</div>
+  </header>
+  <main class="layout">
+    <div class="left">
+      <!-- Round 2 Mission Control (Cleaned up: No Shape/Color checkboxes) -->
+      <section class="card r2-card">
+        <div class="card-head r2-header">
+          <h2 style="color: #195c3f; font-size: 1.08rem; display: flex; align-items: center; gap: 8px;">
+            <span>🎯</span> ภารกิจ Round 2: Fast Target Mission
+          </h2>
+          <span class="r2-badge">ยิงกระสุนเจล (Gel)</span>
+        </div>
+        <div class="r2-content">
+          <p class="r2-info">
+            ✓ โหลดเป้าหมายจาก Round 1 อัตโนมัติ (คัดกรองตัวประกันออกแล้ว)<br>
+            ✓ กล้องจะล็อคสีและรูปร่างของเป้าหมายแต่ละตัวแบบเจาะจงอัตโนมัติ<br>
+            ✓ พร้อมระบบ Fallback ยิงตามพิกัดแผนที่หากกล้องจับไม่ทัน
+          </p>
+          <div class="r2-action-bar">
+            <button type="button" id="start-mission" disabled>🚀 เริ่มภารกิจ Round 2</button>
+            <p id="mission-start-message" role="status" aria-live="polite">กำลังเชื่อมต่อหุ่นยนต์…</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Camera Live Stream -->
+      <section class="card">
+        <div class="card-head"><h2>ภาพจากกล้อง</h2><span class="muted">ภาพล่าสุด · crosshair กลางภาพ</span></div>
+        <div class="camera-wrap">
+          <img src="/video" alt="ภาพสดจากกล้อง RoboMaster">
+          <div class="top-strip"><div class="tag"><span id="tof-label">ToF #0</span>&nbsp; <strong id="tof">— mm</strong></div><div class="tag">Gimbal&nbsp; <strong id="gimbal-angle">—</strong></div></div>
+          <div class="crosshair"><span></span></div>
+        </div>
+        <p class="camera-note muted" id="camera-note">รอภาพจากกล้อง…</p>
+        <p class="camera-targets" id="camera-targets">เป้าในภาพ: รอข้อมูล</p>
+      </section>
+
+      <!-- Mission Route Map (round2_plan.png) -->
+      <section class="card">
+        <div class="card-head"><h2>แผนที่และเส้นทางที่วางแผนไว้</h2><span class="muted">Shortest Path Plan</span></div>
+        <div class="map-wrap">
+          <img class="map-plan-img" src="/api/plan_image" alt="แผนที่เส้นทาง Round 2" onerror="this.style.display='none'">
+          <div class="map-info">
+            <div id="pose">X — · Y — · Yaw —</div>
+            <div>ความเร็ว&nbsp; <strong id="speed">— m/s</strong></div>
+            <div id="round2-alignment-box">สถานะการจัดแนว: รอข้อมูล</div>
+            <div id="round2-lane-box">สถานะแนว IR: รอข้อมูล</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- IR Bumpers -->
+      <section class="card">
+        <div class="card-head"><h2>เซนเซอร์กันชน IR (หน้า / หลัง)</h2><span class="muted">ตรวจสิ่งกีดขวางรอบตัวรถ</span></div>
+        <div class="map-info">
+          <div>หน้าขวา&nbsp; <strong id="front-ir-right">—</strong></div>
+          <div>หน้าซ้าย&nbsp; <strong id="front-ir-left">—</strong></div>
+          <div>หลังขวา&nbsp; <strong id="ir-right">—</strong></div>
+          <div>หลังซ้าย&nbsp; <strong id="ir-left">—</strong></div>
+          <div id="front-ir-state" style="grid-column: 1 / -1;">รอข้อมูล IR หน้า</div>
+          <div id="ir-state" style="grid-column: 1 / -1;">รอข้อมูล IR หลัง</div>
+        </div>
+      </section>
+    </div>
+
+    <!-- Sensor Telemetry Charts -->
+    <section class="card right">
+      <div class="card-head"><h2>กราฟเซนเซอร์ Telemetry</h2><span class="muted" id="graph-summary">ชี้กราฟเพื่ออ่านค่า</span></div>
+      <div class="graphs" id="graphs"><p class="muted" id="empty">รอข้อมูลจากเซนเซอร์ที่เปิดอยู่…</p></div>
+    </section>
+  </main>
+
+  <script>
+    const colors = ["#2582bc", "#ca7325", "#168760", "#8a5ebf", "#c34f88", "#a78918", "#5672bf", "#688e3a"];
+    const history = {};
+    const columns = {};
+    const chartCards = {};
+    let cursor = 0;
+    let latest = {};
+    let busy = false;
+    let missionControl = null;
+    let missionStarting = false;
+    let missionStartError = "";
+
+    function renderMissionControl() {
+      const button = document.getElementById("start-mission");
+      button.disabled = !missionControl?.requires_start || missionControl.started || missionStarting;
+      button.textContent = missionControl?.started ? "✓ ภารกิจกำลังทำงาน" : missionStarting ? "กำลังเริ่ม…" : "🚀 เริ่มภารกิจ Round 2";
+      document.getElementById("mission-start-message").textContent = missionStartError ||
+        (!missionControl ? "กำลังโหลดสถานะภารกิจ…" : missionControl.started ? "หุ่นยนต์กำลังเคลื่อนที่และยิงเป้าหมายตามแผน" :
+          missionControl.requires_start ? "หุ่นยนต์พร้อมแล้ว · กดปุ่มเพื่อเริ่มออกตัวได้ทันที" : "โหมดดูข้อมูล · ไม่มีภารกิจให้เริ่ม");
+    }
+
+    function syncMissionControl(control) {
+      if (missionControl?.started && !control?.started) return;
+      missionControl = control;
+      if (control?.started) missionStartError = "";
+      renderMissionControl();
+    }
+
+    async function startMission() {
+      if (!missionControl?.requires_start || missionControl.started || missionStarting) return;
+      missionStarting = true; missionStartError = ""; renderMissionControl();
+      try {
+        const response = await fetch("/api/mission/start", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({selected: "all", fire_mode: "gel"})
+        });
+        if (!response.ok) throw new Error("เริ่มไม่สำเร็จ กรุณาตรวจสถานะแล้วลองอีกครั้ง");
+        const result = await response.json();
+        missionStarting = false;
+        syncMissionControl({requires_start: true, started: result.started});
+      } catch (error) {
+        missionStarting = false; missionStartError = error.message; renderMissionControl();
+      }
+    }
+
+    document.getElementById("start-mission").addEventListener("click", startMission);
+
+    function number(value, digits = 2) {
+      return typeof value === "number" && Number.isFinite(value) ? value.toFixed(digits) : "—";
+    }
+
+    function fields(name, values) {
+      const labels = columns[name] || [];
+      const result = [];
+      if (!Array.isArray(values)) return result;
+      values.forEach((value, index) => {
+        const label = labels[index] || `value_${index + 1}`;
+        if (Array.isArray(value)) {
+          value.forEach((part, subindex) => {
+            if (part !== null) result.push([`${label}_${subindex + 1}`, Number(part)]);
+          });
+        } else if (value !== null) {
+          result.push([label, Number(value)]);
+        }
+      });
+      return result.filter(item => Number.isFinite(item[1]));
+    }
+
+    function canvasContext(canvas) {
+      const width = canvas.clientWidth;
+      const height = canvas.clientHeight;
+      const ratio = window.devicePixelRatio || 1;
+      canvas.width = Math.max(1, Math.round(width * ratio));
+      canvas.height = Math.max(1, Math.round(height * ratio));
+      const context = canvas.getContext("2d");
+      context.scale(ratio, ratio);
+      return {context, width, height};
+    }
+
+    function createChart(name) {
+      const container = document.getElementById("graphs");
+      document.getElementById("empty")?.remove();
+      const card = document.createElement("section");
+      card.className = "graph";
+      card.innerHTML = `<div class="graph-title"><strong>${name}</strong><span class="muted" id="time-${name}">—</span></div><canvas id="canvas-${name}"></canvas><div class="series-legend" id="legend-${name}"></div><div class="readout" id="readout-${name}">รอข้อมูล…</div>`;
+      container.append(card);
+      const canvas = card.querySelector("canvas");
+      chartCards[name] = {
+        card, canvas,
+        time: card.querySelector(`#time-${name}`),
+        legend: card.querySelector(`#legend-${name}`),
+        readout: card.querySelector(`#readout-${name}`),
+        hoverX: null,
+      };
+      canvas.addEventListener("mousemove", event => {
+        const rect = canvas.getBoundingClientRect();
+        chartCards[name].hoverX = event.clientX - rect.left;
+        drawChart(name);
+      });
+      canvas.addEventListener("mouseleave", () => {
+        chartCards[name].hoverX = null;
+        drawChart(name);
+      });
+    }
+
+    function drawChart(name) {
+      const series = history[name] || [];
+      if (!series.length) return;
+      if (!chartCards[name]) createChart(name);
+      const card = chartCards[name];
+      const {context: ctx, width: w, height: h} = canvasContext(card.canvas);
+      ctx.clearRect(0, 0, w, h);
+      const times = series.map(item => item[0]);
+      const minTime = times[0];
+      const maxTime = times[times.length - 1];
+      const timeSpan = Math.max(maxTime - minTime, 1);
+      const valuesList = series.map(item => fields(name, item[1]));
+      const seriesCount = valuesList.reduce((max, item) => Math.max(max, item.length), 0);
+      if (!card.legend.children.length && valuesList[0]) {
+        valuesList[0].forEach(([label], index) => {
+          const item = document.createElement("span");
+          item.style.setProperty("--line", colors[index % colors.length]);
+          item.textContent = label;
+          card.legend.append(item);
+        });
+      }
+      let minVal = Infinity, maxVal = -Infinity;
+      valuesList.forEach(row => {
+        row.forEach(([, val]) => {
+          minVal = Math.min(minVal, val);
+          maxVal = Math.max(maxVal, val);
+        });
+      });
+      if (!Number.isFinite(minVal)) return;
+      if (minVal === maxVal) { minVal -= 1; maxVal += 1; }
+      const margin = {top: 10, right: 10, bottom: 20, left: 35};
+      const pw = w - margin.left - margin.right;
+      const ph = h - margin.top - margin.bottom;
+      const px = t => margin.left + ((t - minTime) / timeSpan) * pw;
+      const py = v => margin.top + ph - ((v - minVal) / (maxVal - minVal)) * ph;
+
+      ctx.strokeStyle = "#e1e9f0"; ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(margin.left, margin.top); ctx.lineTo(margin.left, margin.top + ph);
+      ctx.lineTo(margin.left + pw, margin.top + ph); ctx.stroke();
+
+      for (let sIdx = 0; sIdx < seriesCount; sIdx++) {
+        ctx.strokeStyle = colors[sIdx % colors.length];
+        ctx.lineWidth = 1.5; ctx.beginPath();
+        let started = false;
+        series.forEach((item, rowIdx) => {
+          const valPair = valuesList[rowIdx][sIdx];
+          if (!valPair) return;
+          const x = px(item[0]), y = py(valPair[1]);
+          if (!started) { ctx.moveTo(x, y); started = true; } else { ctx.lineTo(x, y); }
+        });
+        ctx.stroke();
+      }
+
+      const latestTime = times[times.length - 1];
+      card.time.textContent = `${number(latestTime, 1)} s`;
+      const activeValues = valuesList[valuesList.length - 1] || [];
+      card.readout.innerHTML = activeValues.map(([label, val]) => `${label}: <b>${number(val)}</b>`).join(" · ");
+    }
+
+    async function refresh() {
+      if (busy) return;
+      busy = true;
+      try {
+        const [statusResponse, historyResponse] = await Promise.all([
+          fetch("/api/status", {cache: "no-store"}),
+          fetch(`/api/history?since=${cursor}`, {cache: "no-store"}),
+        ]);
+        if (!statusResponse.ok || !historyResponse.ok) throw new Error("server response failed");
+        const status = await statusResponse.json();
+        syncMissionControl(status.mission_control);
+        const update = await historyResponse.json();
+        latest = status.streams;
+        cursor = update.cursor;
+        Object.assign(columns, update.columns);
+        for (const [name, points] of Object.entries(update.streams)) {
+          if (!history[name]) history[name] = [];
+          history[name].push(...points);
+          if (history[name].length > 2000) history[name].splice(0, history[name].length - 2000);
+          drawChart(name);
+        }
+
+        document.getElementById("mission").textContent = status.mission_status || "กำลังทำงาน";
+        document.getElementById("connection").textContent = "● เชื่อมต่อแล้ว";
+
+        // Update pose and speed readouts
+        if (status.streams.position && status.streams.position.length >= 2) {
+          const px = status.streams.position[0], py = status.streams.position[1];
+          const yaw = status.streams.attitude ? status.streams.attitude[0] : 0;
+          document.getElementById("pose").textContent = `X: ${number(px)} m · Y: ${number(py)} m · Yaw: ${number(yaw)}°`;
+        }
+        if (status.motion_settings?.max_speed_m_s != null) {
+          document.getElementById("speed").textContent = `${number(status.motion_settings.max_speed_m_s, 2)} m/s`;
+        }
+
+        // Round 2 alignment info
+        const alignment2 = status.round2_alignment;
+        if (alignment2) {
+          document.getElementById("round2-alignment-box").textContent = `จัดแนว: ${alignment2.status} (ช่อง ${alignment2.cell?.join(",") || "—"})`;
+        }
+
+        // ToF readout
+        const tofChannel = 0;
+        const tofValue = status.streams.tof?.[tofChannel];
+        document.getElementById("tof").textContent = tofValue > 0 ? `${number(tofValue, 0)} mm` : "— mm";
+
+        // Gimbal angles
+        if (status.streams.gimbal) {
+          const gPitch = status.streams.gimbal[0], gYaw = status.streams.gimbal[1];
+          document.getElementById("gimbal-angle").textContent = `P: ${number(gPitch, 1)}° / Y: ${number(gYaw, 1)}°`;
+        }
+
+        // Camera Note and Target Detection
+        const detector = status.target_detection;
+        const colorLabels = {red: "แดง", green: "เขียว", yellow: "เหลือง", blue: "น้ำเงิน"};
+        const shapeLabels = {circle: "วงกลม", square: "สี่เหลี่ยมจัตุรัส", horizontal: "สี่เหลี่ยมแนวนอน", vertical: "สี่เหลี่ยมแนวตั้ง"};
+        const seenTargets = detector?.detections || status.camera_targets || [];
+        const targets = seenTargets.map(item =>
+          `${colorLabels[item.color] || item.color} ${shapeLabels[item.shape] || item.shape}` +
+          (item.area_px2 != null ? ` (${number(item.area_px2, 0)} px²${item.confirmed ? " · ยืนยันแล้ว" : ""})` : "")
+        ).join(" · ");
+        document.getElementById("camera-note").textContent = status.camera_ready ? "กล้องทำงานปกติ" : "รอเฟรมจากกล้อง…";
+        document.getElementById("camera-targets").textContent = targets ? `เป้าในภาพ (${seenTargets.length}): ${targets}` : "เป้าในภาพ: สแกนตามเส้นทาง…";
+
+        // IR Bumpers
+        for (const [end, ir] of [["rear", status.rear_ir], ["front", status.front_ir]]) {
+          const prefix = end === "rear" ? "ir" : "front-ir";
+          for (const side of ["right", "left"]) {
+            const sensor = ir?.sides?.[side];
+            const label = document.getElementById(`${prefix}-${side}`);
+            if (label) {
+              label.textContent = !ir?.enabled ? "ปิด" : sensor?.detected ? "พบสิ่งกีดขวาง" : "ว่าง";
+              label.style.color = sensor?.detected ? "#c45e24" : "";
+            }
+          }
+          const stateEl = document.getElementById(`${prefix}-state`);
+          if (stateEl) {
+            stateEl.textContent = !ir?.enabled ? `ระบบ IR ${end} ปิด` : ir.blocked ? `IR ${end}: ตรวจพบสิ่งกีดขวาง` : `ระบบ IR ${end}: พร้อม`;
+          }
+        }
+
+      } catch (err) {
+        document.getElementById("connection").textContent = "○ ขาดการเชื่อมต่อ";
+      } finally {
+        busy = false;
+      }
+    }
+
+    setInterval(refresh, 250);
+    refresh();
+  </script>
+</body>
+</html>
